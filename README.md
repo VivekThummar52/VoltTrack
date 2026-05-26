@@ -18,14 +18,14 @@ Each completed session records **start/end time**, **percentage gained**, **peak
 <table>
   <tbody>
     <tr>
-      <td align="center"><strong>Current Session</strong></td>
-      <td align="center"><strong>Today Session Overview</strong></td>
+      <td align="center"><strong>Intro Screen</strong></td>
+      <td align="center"><strong>Current/Today session</strong></td>
       <td align="center"><strong>Recent Session Overview</strong></td>
       <td align="center"><strong>7-Day Chart</strong></td>
     </tr>
     <tr>
-      <td><img width="270" src="https://github.com/user-attachments/assets/cde22396-cca0-41d5-8025-e95f713e1161" /></td>
-      <td><img width="270" src="https://github.com/user-attachments/assets/ee309d7f-f1b6-4ce8-9223-6fce2ab4a64b" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/b216a235-4c02-4e4f-a5f9-66af0a04b2dd" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/010676e6-0aac-4678-a936-33f8390be4dc" /></td>
       <td><img width="270" src="https://github.com/user-attachments/assets/2f066592-f74d-41b7-a9a3-6c2bdf21d132" /></td>
       <td><img width="270" src="https://github.com/user-attachments/assets/1819e0c9-b473-408e-af6c-b4e75cb07b2e" /></td>
     </tr>

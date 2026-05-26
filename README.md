@@ -24,7 +24,7 @@ Each completed session records **start/end time**, **percentage gained**, **peak
       <td align="center"><strong>7-Day Chart</strong></td>
     </tr>
     <tr>
-      <td><img width="270" src="https://github.com/user-attachments/assets/b216a235-4c02-4e4f-a5f9-66af0a04b2dd" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/91f88c06-bcb1-4a7e-8c60-d1d3015882dc" /></td>
       <td><img width="270" src="https://github.com/user-attachments/assets/010676e6-0aac-4678-a936-33f8390be4dc" /></td>
       <td><img width="270" src="https://github.com/user-attachments/assets/2f066592-f74d-41b7-a9a3-6c2bdf21d132" /></td>
       <td><img width="270" src="https://github.com/user-attachments/assets/1819e0c9-b473-408e-af6c-b4e75cb07b2e" /></td>

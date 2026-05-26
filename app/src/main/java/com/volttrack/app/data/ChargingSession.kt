@@ -1,0 +1,57 @@
+package com.volttrack.app.data
+
+import android.content.Context
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.flow.Flow
+
+@Entity(tableName = "sessions")
+data class ChargingSession(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val startTime: Long,
+    val endTime: Long,
+    val startPct: Double,
+    val endPct: Double,
+    val maxWatts: Double,
+    /** Wall-clock instant when the OS reported full/100% while still plugged, if observed. */
+    val chargeCompletedAtMs: Long? = null
+)
+
+@Dao
+interface SessionDao {
+    @Insert
+    suspend fun insert(session: ChargingSession): Long
+
+    @Query("SELECT * FROM sessions ORDER BY startTime DESC")
+    fun getAll(): Flow<List<ChargingSession>>
+}
+
+@Database(entities = [ChargingSession::class], version = 2)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun sessionDao(): SessionDao
+
+    companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN chargeCompletedAtMs INTEGER")
+            }
+        }
+
+        @Volatile private var instance: AppDatabase? = null
+        fun getDatabase(context: Context): AppDatabase =
+            instance ?: synchronized(this) {
+                Room.databaseBuilder(context, AppDatabase::class.java, "volt_db")
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { instance = it }
+            }
+    }
+}

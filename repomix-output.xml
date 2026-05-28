@@ -428,14 +428,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/**
- * Persists charging session boundaries in [SharedPreferences] because [ChargingService] may not
- * reliably run or reach [android.app.Service.onDestroy] on all devices. Unplug finalizes the row.
- *
- * Critical writes use [android.content.SharedPreferences.Editor.commit] so a fast unplug cannot
- * finalize before [beginChargingSession]'s [android.content.SharedPreferences.apply] has landed.
- */
-/** Live charging window tracked in prefs until [finalizeSession] writes to Room. */
 data class ActiveChargingSession(
     val startTime: Long,
     val startPct: Double,
@@ -447,6 +439,7 @@ data class ActiveChargingSession(
 
 object ChargingSessionRecorder {
     private val finalizeMutex = Mutex()
+    private val wattLock = Any() // Thread lock for max watts check-then-act
 
     private const val PREFS = "charging_session_active"
     private const val KEY_START_AT = "start_at_ms"
@@ -457,7 +450,6 @@ object ChargingSessionRecorder {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** New plug-in event: always starts a fresh session window. */
     fun beginChargingSession(context: Context) {
         val app = context.applicationContext
         val pct = BatteryMonitor(app).getPrecisionLevel()
@@ -469,10 +461,6 @@ object ChargingSessionRecorder {
             .commit()
     }
 
-    /**
-     * If the device is charging but we have no session (e.g. missed [Intent.ACTION_POWER_CONNECTED]),
-     * start tracking so unplug can still save.
-     */
     fun ensureSessionStartedIfCharging(context: Context) {
         val app = context.applicationContext
         val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -482,12 +470,13 @@ object ChargingSessionRecorder {
     }
 
     fun updateMaxWatts(context: Context, maxWatts: Double) {
-        prefs(context.applicationContext).edit()
-            .putString(KEY_MAX_W, maxWatts.toString())
-            .apply()
+        synchronized(wattLock) {
+            prefs(context.applicationContext).edit()
+                .putString(KEY_MAX_W, maxWatts.toString())
+                .apply()
+        }
     }
 
-    /** First instant we observe full/100% during an active session (still plugged). */
     fun noteChargeCompletedIfUnset(context: Context) {
         val app = context.applicationContext
         val p = prefs(app)
@@ -496,10 +485,6 @@ object ChargingSessionRecorder {
         p.edit().putLong(KEY_CHARGE_COMPLETED_AT, System.currentTimeMillis()).commit()
     }
 
-    /**
-     * Returns the in-progress session from prefs, or null if nothing is being tracked.
-     * [currentPct] and [nowMs] should reflect the latest battery clock for live duration/gain.
-     */
     fun readActiveSessionOrNull(
         context: Context,
         currentPct: Double,
@@ -522,13 +507,16 @@ object ChargingSessionRecorder {
         )
     }
 
-    /** Raises stored peak for the active session when a new sample is higher (e.g. from the UI poll). */
     fun considerWattSample(context: Context, watts: Double) {
         if (watts <= 0.0) return
         val app = context.applicationContext
-        if (prefs(app).getLong(KEY_START_AT, 0L) == 0L) return
-        val cur = prefs(app).getString(KEY_MAX_W, "0")!!.toDouble()
-        if (watts > cur) updateMaxWatts(app, watts)
+        synchronized(wattLock) {
+            if (prefs(app).getLong(KEY_START_AT, 0L) == 0L) return
+            val cur = prefs(app).getString(KEY_MAX_W, "0")!!.toDouble()
+            if (watts > cur) {
+                prefs(app).edit().putString(KEY_MAX_W, watts.toString()).apply()
+            }
+        }
     }
 
     suspend fun finalizeSession(context: Context) {
@@ -561,7 +549,6 @@ object ChargingSessionRecorder {
         }
     }
 
-    /** For [BroadcastReceiver] / non-suspending callers. */
     fun finalizeSessionBlocking(context: Context) {
         runBlocking { finalizeSession(context) }
     }
@@ -702,6 +689,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.BatteryManager
+import kotlin.math.abs
 import kotlin.math.max
 
 class BatteryMonitor(private val context: Context) {
@@ -728,10 +716,6 @@ class BatteryMonitor(private val context: Context) {
         batteryPrefs().edit().putLong(KEY_FULL_MICRO_AH, merged).apply()
     }
 
-    /**
-     * Remaining % from µAh remaining / µAh when full. Coerces to [0,100].
-     * Returns null if inputs are unusable (no counter, or counter far above full — bad OEM data).
-     */
     private fun percentageFromChargeAndFull(chargeCounter: Long, fullMicroAh: Long): Double? {
         if (fullMicroAh == Long.MIN_VALUE || fullMicroAh < 100_000L) return null
         if (chargeCounter == Long.MIN_VALUE || chargeCounter <= 0) return null
@@ -740,14 +724,13 @@ class BatteryMonitor(private val context: Context) {
         return pct.coerceIn(0.0, 100.0)
     }
 
-    fun getPrecisionLevel(): Double {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun getPrecisionLevel(batteryIntent: Intent? = null): Double {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
 
         val chargeCounter = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
 
-        // Calibrate stored "full" µAh when the OS reports 100% (many phones never expose CHARGE_FULL).
         if (level >= 0 && scale > 0 && level >= scale &&
             chargeCounter > 0 && chargeCounter != Long.MIN_VALUE
         ) {
@@ -785,12 +768,10 @@ class BatteryMonitor(private val context: Context) {
         return (level.toDouble() / scale.toDouble()) * 100.0
     }
 
-    /**
-     * Charger power into the pack (W). Zero when unplugged or when current is negative (discharge).
-     */
-    fun getCurrentWatts(): Double {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun getCurrentWatts(batteryIntent: Intent? = null): Double {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return 0.0
+
         if (intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) == 0) return 0.0
 
         val voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
@@ -801,29 +782,32 @@ class BatteryMonitor(private val context: Context) {
             raw = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_AVERAGE)
         }
         if (raw == Long.MIN_VALUE) return 0.0
-        if (raw < 0) return 0.0
 
-        val microAmps = raw.toDouble()
+        // Use absolute value to bypass OEM sign-flipping.
+        // We already know the device is plugged in via EXTRA_PLUGGED,
+        // so any measurable current is charging current.
+        val microAmps = abs(raw).toDouble()
+
         val wattsFromMicro = voltageMv * microAmps / 1_000_000_000.0
         val wattsFromMilli = voltageMv * microAmps / 1_000_000.0
+
         val w = if (microAmps in 1.0..50_000.0 && wattsFromMicro < 0.05 && wattsFromMilli >= 0.05) {
             wattsFromMilli
         } else {
             wattsFromMicro
         }
+        
         return w.coerceIn(0.0, 120.0)
     }
 
-    /** USB/AC/wireless power present (matches [getCurrentWatts] unplugged check). */
-    fun isExternalPowerConnected(): Boolean {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun isExternalPowerConnected(batteryIntent: Intent? = null): Boolean {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return false
         return intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
     }
 
-    /** Full / 100% as reported by the system (while still able to be plugged). */
-    fun isBatteryChargingComplete(): Boolean {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun isBatteryChargingComplete(batteryIntent: Intent? = null): Boolean {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return false
         val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
         if (status == BatteryManager.BATTERY_STATUS_FULL) return true
@@ -914,11 +898,14 @@ package com.volttrack.app.notification
 
 import android.Manifest
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.volttrack.app.MainActivity
 import com.volttrack.app.R
 import com.volttrack.app.data.ChargingSession
 import java.util.Locale
@@ -936,6 +923,18 @@ object NotificationHelper {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun mainActivityIntent(context: Context, requestCode: Int): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     fun showSessionSaved(context: Context, session: ChargingSession) {
         if (!canPostNotifications(context)) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -945,11 +944,13 @@ object NotificationHelper {
         val text = "Gained ${String.format(locale, "%.2f", gain)}% • peak ${
             String.format(locale, "%.1f", session.maxWatts)
         } W"
+
         val n = NotificationCompat.Builder(context, NotificationChannels.SESSION_EVENTS)
             .setSmallIcon(R.drawable.ic_lock_idle_low_battery)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(mainActivityIntent(context, requestCode = 0))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
@@ -962,10 +963,12 @@ object NotificationHelper {
         val locale = Locale.getDefault()
         val title = "Battery goal reached"
         val text = "Battery is at ${String.format(locale, "%.1f", percent)}% (your target)."
+
         val n = NotificationCompat.Builder(context, NotificationChannels.GOALS)
             .setSmallIcon(R.drawable.ic_lock_idle_low_battery)
             .setContentTitle(title)
             .setContentText(text)
+            .setContentIntent(mainActivityIntent(context, requestCode = 1))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
@@ -980,30 +983,52 @@ package com.volttrack.app.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.volttrack.app.data.ChargingSessionRecorder
 import com.volttrack.app.service.ChargingService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class PowerReceiver : BroadcastReceiver() {
+    private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
         val pendingResult = goAsync()
-        Thread {
+
+        receiverScope.launch {
             try {
                 when (intent.action) {
                     Intent.ACTION_POWER_CONNECTED -> {
-                        // Do not start a foreground service from a broadcast: Android 12+ often blocks it
-                        // (ForegroundServiceStartNotAllowedException). Session + peak watts use prefs / UI instead.
                         ChargingSessionRecorder.beginChargingSession(app)
+
+                        // Attempt to start the foreground service.
+                        // On Android 12+, this may throw ForegroundServiceStartNotAllowedException
+                        // if strictly in the background, but we try anyway to catch graceful windows.
+                        try {
+                            val serviceIntent = Intent(app, ChargingService::class.java)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                ContextCompat.startForegroundService(app, serviceIntent)
+                            } else {
+                                app.startService(serviceIntent)
+                            }
+                        } catch (e: Exception) {
+                            // Safely ignored if the system blocks it
+                        }
                     }
                     Intent.ACTION_POWER_DISCONNECTED -> {
-                        ChargingSessionRecorder.finalizeSessionBlocking(app)
+                        // Safely using the suspending function instead of blocking the thread
+                        ChargingSessionRecorder.finalizeSession(app)
                         app.stopService(Intent(app, ChargingService::class.java))
                     }
                 }
             } finally {
                 pendingResult.finish()
             }
-        }.start()
+        }
     }
 }
 </file>
@@ -1015,6 +1040,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.volttrack.app.R
@@ -1073,8 +1099,12 @@ class ChargingService : Service() {
                     PreferencesRepository.REFRESH_MIN,
                     PreferencesRepository.REFRESH_MAX
                 )
-                val pct = monitor.getPrecisionLevel()
-                val currentWatts = monitor.getCurrentWatts()
+
+                // Fetch the intent once to use efficiently across checks
+                val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+                val pct = monitor.getPrecisionLevel(batteryIntent)
+                val currentWatts = monitor.getCurrentWatts(batteryIntent)
                 if (currentWatts > maxWatts) {
                     maxWatts = currentWatts
                     ChargingSessionRecorder.updateMaxWatts(this@ChargingService, maxWatts)
@@ -1666,6 +1696,7 @@ package com.volttrack.app.ui.main
 
 import android.app.Application
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -1693,7 +1724,6 @@ data class MainUiState(
     val batteryPercent: Double = 0.0,
     val displayWatts: Double = 0.0,
     val powerUnit: PowerUnit = PowerUnit.WATTS,
-    /** In-progress charge (prefs); null when unplugged or no session started. */
     val activeSession: ActiveChargingSession? = null,
     val sessions: List<ChargingSession> = emptyList(),
     val collapsedDayKeys: Set<Long> = emptySet()
@@ -1748,7 +1778,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var previousPlugged: Boolean? = null
             while (true) {
                 val app = getApplication<Application>()
-                val plugged = batteryMonitor.isExternalPowerConnected()
+
+                // Fetch the intent once to use efficiently across all battery checks in this tick
+                val batteryIntent = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+                val plugged = batteryMonitor.isExternalPowerConnected(batteryIntent)
                 if (previousPlugged != null) {
                     if (!previousPlugged && plugged) {
                         goalNotifiedThisSession = false
@@ -1764,18 +1798,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 previousPlugged = plugged
 
-                if (plugged && batteryMonitor.isBatteryChargingComplete()) {
+                if (plugged && batteryMonitor.isBatteryChargingComplete(batteryIntent)) {
                     ChargingSessionRecorder.noteChargeCompletedIfUnset(app)
                 }
 
-                val pct = batteryMonitor.getPrecisionLevel()
-                val sample = batteryMonitor.getCurrentWatts()
+                val pct = batteryMonitor.getPrecisionLevel(batteryIntent)
+                val sample = batteryMonitor.getCurrentWatts(batteryIntent)
                 if (plugged) {
                     ChargingSessionRecorder.considerWattSample(app, sample)
                 }
+
+                // THE FIX: Snap instantly to the first real reading
                 wattSmoothed = when {
                     sample <= 0.0 -> 0.0
-                    wattSmoothed < 0.0 -> sample
+                    wattSmoothed <= 0.0 && sample > 0.0 -> sample // Instantly bypass smoothing on the first positive read
                     else -> wattSmoothed * 0.55 + sample * 0.45
                 }
                 val nowMs = System.currentTimeMillis()
@@ -1817,7 +1853,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Call from [android.app.Activity.onStart] when the process may need to sync charging state. */
     fun onForegroundChargingCheck() {
         val app = getApplication<Application>()
         val bm = app.getSystemService(android.content.Context.BATTERY_SERVICE) as BatteryManager
@@ -3576,235 +3611,6 @@ if "%OS%"=="Windows_NT" endlocal
 :omega
 </file>
 
-<file path="README.md">
-# VoltTrack
-
-<p align="center">
-  <strong>Live battery and charging analytics for Android</strong><br/>
-  <sub>Track input power, session gain, and history—while you charge and after you unplug.</sub>
-</p>
-
----
-
-## Concept
-
-**VoltTrack** is an Android app that monitors your device while it is on external power: it shows **battery level** (with finer-than-integer precision where possible), **estimated input power (watts)**, and **charging sessions**—from plug-in to unplug.
-
-Each completed session records **start/end time**, **percentage gained**, **peak wattage** during the session, and (when the OS reports it) **when charging reached “full”** while still plugged in. Sessions are grouped by **calendar day** with expandable summaries so you can review patterns over time.
-
----
-
-## Why it exists
-
-- **Visibility**: Many users never see real charging power or per-session energy gain in one place.
-- **Persistence**: Sessions survive app restarts because boundaries and peaks are coordinated through **SharedPreferences** (active window) and **Room** (completed rows), with careful handling around fast unplug events.
-- **Reliability**: Plug/unplug is observed via **broadcasts** and **in-app polling** so sessions still line up when a broadcast is missed.
-
----
-
-## Features
-
-| Area | What you get |
-|------|----------------|
-| **Live dashboard** | Battery %, smoothed input power (W), updates on a steady interval while the app runs |
-| **Current session** | In-progress charge shown from prefs (gain so far, duration, peak W, “charge completed” time if observed) |
-| **History** | Completed sessions in **Recent Sessions**, grouped by day (Today / Yesterday / date), collapsible sections |
-| **Background** | **Foreground service** while charging (when allowed by the OS) so monitoring can continue with a visible notification |
-| **Architecture** | **MVVM** + repository pattern, **Jetpack Compose** UI, **StateFlow** for screen state |
-
----
-
-## How it works (flow)
-
-```mermaid
-flowchart LR
-    subgraph triggers [Triggers]
-        BC[ACTION_POWER_CONNECTED]
-        BD[ACTION_POWER_DISCONNECTED]
-        UI[Main UI poll]
-    end
-
-    subgraph recorder [ChargingSessionRecorder]
-        PREF[(SharedPreferences\nactive session)]
-    end
-
-    subgraph persist [Persistence]
-        ROOM[(Room\ncompleted sessions)]
-    end
-
-    BC --> begin[beginChargingSession]
-    BD --> fin[finalizeSession → insert + clear prefs]
-    UI --> ensure[ensure / watt samples / full detection]
-    begin --> PREF
-    ensure --> PREF
-    fin --> ROOM
-    UI --> FGS[ChargingService FGS]
-```
-
-1. **Plug in**  
-   - `PowerReceiver` may call `beginChargingSession`, or the **ViewModel** loop detects external power and starts a session.  
-   - Active data lives in **SharedPreferences** until finalize.
-
-2. **While charging**  
-   - **MainViewModel** polls `BatteryMonitor`: plug state, %, watts, smoothing, and updates **peak watts** / **charge-completed** timestamps via `ChargingSessionRecorder`.  
-   - **ChargingService** (foreground) can also sample watts on a longer interval.  
-   - The UI reads **Room** for history and **prefs snapshot** for the **current session** card.
-
-3. **Unplug**  
-   - `PowerReceiver` runs `finalizeSessionBlocking`, or the UI loop calls **`finalizeSession`**: builds a `ChargingSession`, **inserts into Room**, clears prefs.  
-   - The new row appears under **Recent Sessions**.
-
-4. **Foreground**  
-   - When the app detects charging (e.g. returning to the foreground), it aligns session state and may start the foreground service.
-
----
-
-## Architecture
-
-| Layer | Role |
-|-------|------|
-| **UI** | `MainActivity` → `MainScreen` (Compose), `VoltTrackTheme`, status bar styling |
-| **ViewModel** | `MainViewModel` — `MainUiState` (`StateFlow`): battery, watts, active session, sessions list, collapsed day keys; charging loop; `onForegroundChargingCheck()` |
-| **Repository** | `SessionRepository` — exposes `Flow` of sessions from Room |
-| **Data** | `ChargingSession` entity, `AppDatabase` / `SessionDao`, `ChargingSessionRecorder` (prefs + finalize → Room) |
-| **Logic** | `BatteryMonitor` — level, charge counter, watts, plug detection helpers |
-| **System** | `ChargingService` (foreground), `PowerReceiver` (power connect/disconnect) |
-
-```text
-com.volttrack.app
-├── MainActivity.kt
-├── data/
-│   ├── ChargingSession.kt          # Room entity + database
-│   ├── ChargingSessionRecorder.kt  # Active session (prefs) + finalize
-│   └── repository/
-│       └── SessionRepository.kt
-├── logic/
-│   └── BatteryMonitor.kt
-├── service/
-│   └── ChargingService.kt
-├── receiver/
-│   └── PowerReceiver.kt
-└── ui/
-    ├── main/
-    │   ├── MainViewModel.kt
-    │   └── MainScreen.kt
-    ├── SessionUiFormatting.kt
-    └── theme/
-```
-
----
-
-## Tech stack
-
-| Category | Choices |
-|----------|---------|
-| **Language** | Kotlin **2.0** (JVM 11) |
-| **UI** | Jetpack **Compose**, **Material 3** |
-| **Async** | **Kotlin Coroutines**, **Flow**, **StateFlow** |
-| **Lifecycle** | **ViewModel**, `lifecycle-runtime-compose` (`collectAsStateWithLifecycle`) |
-| **Storage** | **Room** 2.6 (KAPT), **SharedPreferences** for active session |
-| **Build** | Android Gradle Plugin **8.12**, `compileSdk` / `targetSdk` **36**, `minSdk` **25** |
-
----
-
-## Permissions
-
-| Permission | Purpose |
-|------------|---------|
-| `FOREGROUND_SERVICE` | Run `ChargingService` in the foreground while monitoring |
-| `FOREGROUND_SERVICE_DATA_SYNC` | Foreground service type alignment on newer Android versions |
-| `POST_NOTIFICATIONS` | Show the ongoing notification for the foreground service (where applicable) |
-
----
-
-## Building & running
-
-**Requirements:** Android Studio with a recent AGP, JDK 11+, Android SDK **36** (or compatible).
-
-```bash
-# Windows (PowerShell)
-.\gradlew :app:assembleDebug
-
-# Debug install (device or emulator)
-.\gradlew :app:installDebug
-```
-
-Open the project root in Android Studio and use **Run** on a device or emulator with **API 25+**.
-
----
-
-## Project metadata
-
-| Field | Value |
-|-------|--------|
-| **Application ID** | `com.volttrack.app` |
-| **Version** | `1.0` (versionCode `1`) |
-
----
-
-## Notes & limitations
-
-- **Watt estimates** depend on device-reported values (`BatteryManager`); not all OEMs expose consistent data.
-- **Foreground service** start rules differ by Android version; the app handles common failure cases (e.g. background start restrictions).
-- **Broadcast receiver** does not start the foreground service on `ACTION_POWER_CONNECTED` (Android 12+ restrictions); session state still updates via prefs and UI/service paths.
-
----
-
-## Future goals
-
-Ideas worth considering as VoltTrack grows—not a committed roadmap, but a structured backlog.
-
-### High impact
-
-| Direction | Idea |
-|-----------|------|
-| **Notifications** | Optional “session saved” summary, or a richer ongoing notification (e.g. % and W) beyond generic “monitoring” |
-| **Home screen widget** | Glanceable current %, watts, or last session summary |
-| **Export / backup** | CSV or JSON of sessions (optional restore) for spreadsheets or device changes |
-| **Charts** | Simple daily/weekly views—time on charger, energy-style trends from existing session data |
-| **Session detail** | Tap a row → full breakdown, optional notes, safe delete/edit |
-
-### Quality & trust
-
-| Direction | Idea |
-|-----------|------|
-| **Onboarding** | Short screen: permissions, why the foreground service exists, that watt numbers are estimates |
-| **Privacy copy in-app** | Clarify local-only storage unless the user exports |
-| **Automated tests** | ViewModel state tests, DAO tests, critical `ChargingSessionRecorder` / finalize paths |
-
-### Deeper product
-
-| Direction | Idea |
-|-----------|------|
-| **Cost estimate** | Optional $/kWh (user-entered) × rough session energy |
-| **Goals / alerts** | e.g. notify at 80%—behavior varies by OEM; set expectations in UI |
-| **Wear OS / Quick Settings** | Tile or glance for power users |
-| **Material You** | Dynamic color on top of Material 3 |
-
-### Engineering hygiene
-
-| Direction | Idea |
-|-----------|------|
-| **Settings** | Theme, units (e.g. W vs mW), refresh cadence where safe, verbose logging on debug builds |
-| **Crash reporting** | Opt-in (e.g. Crashlytics) with an updated privacy stance if used |
-| **Store presence** | Screenshots, short video, clear disclaimer that estimates depend on the device |
-
-Pick a focus—**stickiness** (widgets/notifications), **credibility** (tests + onboarding), or **depth** (charts/export)—and ship a small milestone (e.g. “v1.1: three items”) before expanding.
-
----
-
-## License
-
-Add your preferred license here (e.g. MIT, Apache-2.0) once you decide how you want VoltTrack distributed.
-
----
-
-<p align="center">
-  Built with Kotlin · Compose · Room<br/>
-  <sub>VoltTrack — know your charge.</sub>
-</p>
-</file>
-
 <file path="settings.gradle.kts">
 pluginManagement {
     repositories {
@@ -3829,6 +3635,289 @@ dependencyResolutionManagement {
 
 rootProject.name = "VoltTrack"
 include(":app")
+</file>
+
+<file path="README.md">
+# VoltTrack
+
+<p align="center">
+  <strong>Live battery and charging analytics for Android</strong><br/>
+  <sub>Track input power, session gain, and history — while you charge and after you unplug.</sub>
+</p>
+
+---
+
+## What is VoltTrack?
+
+**VoltTrack** is a native Android app that monitors your device while it is on external power. It shows **battery level** (with finer-than-integer precision where the device supports it), **estimated input power in watts**, and a full log of **charging sessions** — from plug-in to unplug.
+
+Each completed session records **start/end time**, **percentage gained**, **peak wattage**, and (when the OS reports it) **the moment charging reached "full"** while still plugged in. Sessions are grouped by calendar day with collapsible summaries so you can review patterns over time.
+
+## Screenshots
+
+<table>
+  <tbody>
+    <tr>
+      <td align="center"><strong>Intro Screen</strong></td>
+      <td align="center"><strong>Current/Today session</strong></td>
+      <td align="center"><strong>Recent Session Overview</strong></td>
+      <td align="center"><strong>7-Day Chart</strong></td>
+    </tr>
+    <tr>
+      <td><img width="270" src="https://github.com/user-attachments/assets/2c98a0e5-acf1-480a-9952-576a3d48364b" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/010676e6-0aac-4678-a936-33f8390be4dc" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/2f066592-f74d-41b7-a9a3-6c2bdf21d132" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/1819e0c9-b473-408e-af6c-b4e75cb07b2e" /></td>
+    </tr>
+    <tr>
+      <td align="center"><strong>Settings</strong></td>
+      <td align="center"><strong>Battery Goal Alert</strong></td>
+      <td align="center"><strong>Privacy Page</strong></td>
+      <td align="center"><strong>Dark Mode</strong></td>
+    </tr>
+    <tr>
+      <td><img width="270" src="https://github.com/user-attachments/assets/55400fd5-8364-45e1-9562-0faed8970811" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/85348d22-db8f-4ae5-9c04-aff527fc7214" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/32bf95f1-9d9f-455c-8f1a-21623884f067" /></td>
+      <td><img width="270" src="https://github.com/user-attachments/assets/87a09899-49c9-41c2-9c8b-3850f38adb2e" /></td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+## Features
+
+| Area | What you get |
+|------|--------------|
+| **Live dashboard** | Battery %, smoothed input power (W or mW), updated on a configurable interval |
+| **Current session card** | In-progress charge — gain so far, duration, peak watts, "charge completed" time if observed |
+| **Session history** | Completed sessions grouped by day (Today / Yesterday / full date), collapsible with a per-day summary |
+| **7-day chart** | Bar chart of total time on charger per calendar day, last 7 days |
+| **Battery goal alert** | Optional notification when battery reaches your target % while plugged in |
+| **Onboarding** | First-run screen covering monitoring, estimates, notifications, and notification permission request |
+| **Privacy screen** | In-app explanation of local-only storage, permissions, and estimate accuracy |
+| **Settings** | Theme (Light / Dark / System), power unit (W / mW), refresh interval (1 s – 10 s), goal toggle + target % |
+| **Background monitoring** | Foreground service (when allowed) keeps monitoring alive with a persistent notification |
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph triggers [Triggers]
+        BC[ACTION_POWER_CONNECTED]
+        BD[ACTION_POWER_DISCONNECTED]
+        UI[Main UI / ViewModel poll]
+    end
+
+    subgraph recorder [ChargingSessionRecorder]
+        PREF[(SharedPreferences\nactive session)]
+    end
+
+    subgraph persist [Persistence]
+        ROOM[(Room\ncompleted sessions)]
+    end
+
+    BC --> begin[beginChargingSession]
+    BD --> fin[finalizeSession → insert + clear prefs]
+    UI --> ensure[ensure / watt samples / full detection]
+    begin --> PREF
+    ensure --> PREF
+    fin --> ROOM
+    UI --> FGS[ChargingService FGS]
+```
+
+**1. Plug in**
+- `PowerReceiver` calls `beginChargingSession`, or the **ViewModel loop** detects external power and starts a session.
+- Active session data lives in **SharedPreferences** until finalize — surviving process death during fast unplugs.
+
+**2. While charging**
+- `MainViewModel` polls `BatteryMonitor`: plug state, %, watts, smoothing, and updates **peak watts** and **charge-completed timestamp** via `ChargingSessionRecorder`.
+- `ChargingService` (foreground) also samples watts on the same interval.
+- The UI reads **Room** for history and the **prefs snapshot** for the current-session card.
+
+**3. Unplug**
+- `PowerReceiver` runs `finalizeSessionBlocking`, or the UI loop calls `finalizeSession`: builds a `ChargingSession`, inserts into Room, clears prefs, and posts a "session saved" notification.
+- The new row appears immediately under **Recent Sessions**.
+
+**4. Return to foreground**
+- On `Activity.onStart`, the app checks charging state and aligns session tracking, starting the foreground service if needed.
+
+---
+
+## Architecture
+
+| Layer | Role |
+|-------|------|
+| **UI** | `MainActivity` → `VoltTrackNavHost` → `MainScreen`, `ChartsScreen`, `SettingsScreen`, `PrivacyScreen`, `OnboardingScreen` (all Compose) |
+| **ViewModel** | `MainViewModel` — `MainUiState` (`StateFlow`): battery %, watts, active session, session list, collapsed day keys, charging loop, goal notification logic |
+| **ViewModel** | `SettingsViewModel` — proxies `PreferencesRepository` writes; exposes prefs as `StateFlow` |
+| **Repository** | `SessionRepository` — exposes `Flow<List<ChargingSession>>` from Room |
+| **Preferences** | `PreferencesRepository` — DataStore-backed; theme, power unit, refresh interval, goal settings |
+| **Data** | `ChargingSession` entity + `SessionDao`, `AppDatabase` (Room v2 with migration), `ChargingSessionRecorder` (active session in prefs + finalize → Room) |
+| **Logic** | `BatteryMonitor` — precision level, current watts, plug detection; handles OEM unit ambiguity |
+| **System** | `ChargingService` (foreground, `dataSync` type), `PowerReceiver` (power connect/disconnect broadcasts) |
+
+```
+com.volttrack.app
+├── MainActivity.kt
+├── VoltTrackApplication.kt         # Notification channel setup on app start
+├── data/
+│   ├── ChargingSession.kt          # Room entity + DAO + AppDatabase (v2)
+│   ├── ChargingSessionRecorder.kt  # Active session (SharedPreferences) + finalize → Room
+│   ├── preferences/
+│   │   ├── PreferencesRepository.kt
+│   │   └── UserPreferences.kt      # ThemePreference, PowerUnit enums
+│   └── repository/
+│       └── SessionRepository.kt
+├── logic/
+│   └── BatteryMonitor.kt
+├── notification/
+│   ├── NotificationChannels.kt     # Three channels: service, session events, goals
+│   └── NotificationHelper.kt
+├── receiver/
+│   └── PowerReceiver.kt
+├── service/
+│   └── ChargingService.kt
+└── ui/
+    ├── VoltTrackAppContent.kt      # Theme wrapper
+    ├── VoltTrackNavHost.kt         # Navigation graph + bottom bar
+    ├── PowerDisplay.kt             # W / mW formatting
+    ├── SessionUiFormatting.kt      # Date grouping, duration, summary lines
+    ├── StatusBarStyle.kt
+    ├── charts/
+    │   ├── ChartAggregation.kt     # 7-day bar data aggregation
+    │   └── ChartsScreen.kt
+    ├── main/
+    │   ├── MainViewModel.kt
+    │   └── MainScreen.kt
+    ├── onboarding/
+    │   └── OnboardingScreen.kt
+    ├── settings/
+    │   ├── SettingsViewModel.kt
+    │   ├── SettingsScreen.kt
+    │   └── PrivacyScreen.kt
+    └── theme/
+        ├── Color.kt
+        ├── Theme.kt                # Material You dynamic color (Android 12+), Light/Dark fallback
+        └── Type.kt
+```
+
+---
+
+## Tech stack
+
+| Category | Details |
+|----------|---------|
+| **Language** | Kotlin 2.0.21 (JVM 11) |
+| **UI** | Jetpack Compose, Material 3, Navigation Compose 2.8.4 |
+| **Async** | Kotlin Coroutines, Flow, StateFlow |
+| **Lifecycle** | AndroidViewModel, `lifecycle-runtime-compose` (`collectAsStateWithLifecycle`) |
+| **Storage** | Room 2.6.1 (KAPT), DataStore Preferences 1.1.1, SharedPreferences (active session) |
+| **Build** | AGP 8.12.3, Gradle 8.13, `compileSdk` / `targetSdk` 36, `minSdk` 25 |
+| **Testing** | JUnit 4, Google Truth, Coroutines Test, Room in-memory testing |
+
+---
+
+## Permissions
+
+| Permission | Purpose |
+|------------|---------|
+| `FOREGROUND_SERVICE` | Run `ChargingService` in the foreground while monitoring |
+| `FOREGROUND_SERVICE_DATA_SYNC` | Declares the foreground service type required on Android 14+ |
+| `POST_NOTIFICATIONS` | Show the ongoing service notification and session/goal alerts (Android 13+) |
+
+---
+
+## Building & running
+
+**Requirements:** Android Studio (latest stable), JDK 11+, Android SDK 36.
+
+```bash
+# Clone and open the project root in Android Studio, or build from the command line:
+
+# macOS / Linux
+./gradlew :app:assembleDebug
+
+# Windows (PowerShell)
+.\gradlew :app:assembleDebug
+
+# Install on a connected device or running emulator (API 25+)
+./gradlew :app:installDebug
+```
+
+Run the app on a physical device for accurate wattage readings — emulators do not expose real battery current data.
+
+---
+
+## Tests
+
+The project has three test suites:
+
+| Test | Type | What it covers |
+|------|------|----------------|
+| `ChartAggregationTest` | Unit | `aggregateChargeTimeByDay` — empty list, same-day duration summing |
+| `MainViewModelGoalLogicTest` | Unit | Goal-fire logic (enabled/disabled, threshold boundary) |
+| `SessionDaoTest` | Instrumented | Room DAO insert + Flow emission on an in-memory database |
+
+```bash
+# Unit tests
+./gradlew :app:test
+
+# Instrumented tests (requires a connected device or emulator)
+./gradlew :app:connectedAndroidTest
+```
+
+---
+
+## Project metadata
+
+| Field | Value |
+|-------|-------|
+| **Application ID** | `com.volttrack.app` |
+| **Version name** | `1.0` |
+| **Version code** | `1` |
+
+---
+
+## Notes & limitations
+
+- **Watt estimates** are derived from device-reported voltage and current (`BatteryManager`). OEM implementations vary widely — values are useful for trends, not lab-grade measurement.
+- **Foreground service** start rules differ by Android version. The app handles `ForegroundServiceStartNotAllowedException` and `SecurityException` gracefully; session tracking continues via SharedPreferences and the ViewModel path even if the service cannot start.
+- **`ACTION_POWER_CONNECTED`** does not launch the foreground service directly (blocked on Android 12+ in background). The service starts from the ViewModel when the app is in the foreground.
+- **Room database** is at version 2. The migration from v1 adds the `chargeCompletedAtMs` column.
+
+---
+
+## Future ideas
+
+Not a committed roadmap — ideas worth considering as VoltTrack grows.
+
+| Direction | Idea |
+|-----------|------|
+| **Home screen widget** | Glanceable current %, watts, or last session summary |
+| **Export / backup** | CSV or JSON of sessions for spreadsheets or device transfers |
+| **Session detail** | Tap a row → full breakdown, optional notes, safe delete |
+| **Cost estimate** | Optional $/kWh (user-entered) × rough session energy |
+| **Wear OS / Quick Settings tile** | Power-user glance |
+| **Opt-in crash reporting** | e.g. Crashlytics, with updated privacy disclosure |
+| **Play Store** | Screenshots, short video, clear estimate disclaimer |
+| **KSP migration** | Replace KAPT with KSP for Room compiler (faster incremental builds) |
+
+---
+
+## License
+
+Add your preferred license here (e.g. MIT, Apache-2.0) once you decide how you want VoltTrack distributed.
+
+---
+
+<p align="center">
+  Built with Kotlin · Compose · Room<br/>
+  <sub>VoltTrack — know your charge.</sub>
+</p>
 </file>
 
 </files>

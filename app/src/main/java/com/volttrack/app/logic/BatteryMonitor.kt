@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.BatteryManager
+import kotlin.math.abs
 import kotlin.math.max
 
 class BatteryMonitor(private val context: Context) {
@@ -31,10 +32,6 @@ class BatteryMonitor(private val context: Context) {
         batteryPrefs().edit().putLong(KEY_FULL_MICRO_AH, merged).apply()
     }
 
-    /**
-     * Remaining % from µAh remaining / µAh when full. Coerces to [0,100].
-     * Returns null if inputs are unusable (no counter, or counter far above full — bad OEM data).
-     */
     private fun percentageFromChargeAndFull(chargeCounter: Long, fullMicroAh: Long): Double? {
         if (fullMicroAh == Long.MIN_VALUE || fullMicroAh < 100_000L) return null
         if (chargeCounter == Long.MIN_VALUE || chargeCounter <= 0) return null
@@ -43,14 +40,13 @@ class BatteryMonitor(private val context: Context) {
         return pct.coerceIn(0.0, 100.0)
     }
 
-    fun getPrecisionLevel(): Double {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun getPrecisionLevel(batteryIntent: Intent? = null): Double {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
 
         val chargeCounter = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
 
-        // Calibrate stored "full" µAh when the OS reports 100% (many phones never expose CHARGE_FULL).
         if (level >= 0 && scale > 0 && level >= scale &&
             chargeCounter > 0 && chargeCounter != Long.MIN_VALUE
         ) {
@@ -88,12 +84,10 @@ class BatteryMonitor(private val context: Context) {
         return (level.toDouble() / scale.toDouble()) * 100.0
     }
 
-    /**
-     * Charger power into the pack (W). Zero when unplugged or when current is negative (discharge).
-     */
-    fun getCurrentWatts(): Double {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun getCurrentWatts(batteryIntent: Intent? = null): Double {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return 0.0
+
         if (intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) == 0) return 0.0
 
         val voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
@@ -104,29 +98,32 @@ class BatteryMonitor(private val context: Context) {
             raw = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_AVERAGE)
         }
         if (raw == Long.MIN_VALUE) return 0.0
-        if (raw < 0) return 0.0
 
-        val microAmps = raw.toDouble()
+        // Use absolute value to bypass OEM sign-flipping.
+        // We already know the device is plugged in via EXTRA_PLUGGED,
+        // so any measurable current is charging current.
+        val microAmps = abs(raw).toDouble()
+
         val wattsFromMicro = voltageMv * microAmps / 1_000_000_000.0
         val wattsFromMilli = voltageMv * microAmps / 1_000_000.0
+
         val w = if (microAmps in 1.0..50_000.0 && wattsFromMicro < 0.05 && wattsFromMilli >= 0.05) {
             wattsFromMilli
         } else {
             wattsFromMicro
         }
+        
         return w.coerceIn(0.0, 120.0)
     }
 
-    /** USB/AC/wireless power present (matches [getCurrentWatts] unplugged check). */
-    fun isExternalPowerConnected(): Boolean {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun isExternalPowerConnected(batteryIntent: Intent? = null): Boolean {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return false
         return intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
     }
 
-    /** Full / 100% as reported by the system (while still able to be plugged). */
-    fun isBatteryChargingComplete(): Boolean {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    fun isBatteryChargingComplete(batteryIntent: Intent? = null): Boolean {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?: return false
         val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
         if (status == BatteryManager.BATTERY_STATUS_FULL) return true

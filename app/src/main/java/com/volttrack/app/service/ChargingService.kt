@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.volttrack.app.R
@@ -62,8 +63,12 @@ class ChargingService : Service() {
                     PreferencesRepository.REFRESH_MIN,
                     PreferencesRepository.REFRESH_MAX
                 )
-                val pct = monitor.getPrecisionLevel()
-                val currentWatts = monitor.getCurrentWatts()
+
+                // Fetch the intent once to use efficiently across checks
+                val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+                val pct = monitor.getPrecisionLevel(batteryIntent)
+                val currentWatts = monitor.getCurrentWatts(batteryIntent)
                 if (currentWatts > maxWatts) {
                     maxWatts = currentWatts
                     ChargingSessionRecorder.updateMaxWatts(this@ChargingService, maxWatts)

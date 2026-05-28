@@ -10,14 +10,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/**
- * Persists charging session boundaries in [SharedPreferences] because [ChargingService] may not
- * reliably run or reach [android.app.Service.onDestroy] on all devices. Unplug finalizes the row.
- *
- * Critical writes use [android.content.SharedPreferences.Editor.commit] so a fast unplug cannot
- * finalize before [beginChargingSession]'s [android.content.SharedPreferences.apply] has landed.
- */
-/** Live charging window tracked in prefs until [finalizeSession] writes to Room. */
 data class ActiveChargingSession(
     val startTime: Long,
     val startPct: Double,
@@ -29,6 +21,7 @@ data class ActiveChargingSession(
 
 object ChargingSessionRecorder {
     private val finalizeMutex = Mutex()
+    private val wattLock = Any() // Thread lock for max watts check-then-act
 
     private const val PREFS = "charging_session_active"
     private const val KEY_START_AT = "start_at_ms"
@@ -39,7 +32,6 @@ object ChargingSessionRecorder {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** New plug-in event: always starts a fresh session window. */
     fun beginChargingSession(context: Context) {
         val app = context.applicationContext
         val pct = BatteryMonitor(app).getPrecisionLevel()
@@ -51,10 +43,6 @@ object ChargingSessionRecorder {
             .commit()
     }
 
-    /**
-     * If the device is charging but we have no session (e.g. missed [Intent.ACTION_POWER_CONNECTED]),
-     * start tracking so unplug can still save.
-     */
     fun ensureSessionStartedIfCharging(context: Context) {
         val app = context.applicationContext
         val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -64,12 +52,13 @@ object ChargingSessionRecorder {
     }
 
     fun updateMaxWatts(context: Context, maxWatts: Double) {
-        prefs(context.applicationContext).edit()
-            .putString(KEY_MAX_W, maxWatts.toString())
-            .apply()
+        synchronized(wattLock) {
+            prefs(context.applicationContext).edit()
+                .putString(KEY_MAX_W, maxWatts.toString())
+                .apply()
+        }
     }
 
-    /** First instant we observe full/100% during an active session (still plugged). */
     fun noteChargeCompletedIfUnset(context: Context) {
         val app = context.applicationContext
         val p = prefs(app)
@@ -78,10 +67,6 @@ object ChargingSessionRecorder {
         p.edit().putLong(KEY_CHARGE_COMPLETED_AT, System.currentTimeMillis()).commit()
     }
 
-    /**
-     * Returns the in-progress session from prefs, or null if nothing is being tracked.
-     * [currentPct] and [nowMs] should reflect the latest battery clock for live duration/gain.
-     */
     fun readActiveSessionOrNull(
         context: Context,
         currentPct: Double,
@@ -104,13 +89,16 @@ object ChargingSessionRecorder {
         )
     }
 
-    /** Raises stored peak for the active session when a new sample is higher (e.g. from the UI poll). */
     fun considerWattSample(context: Context, watts: Double) {
         if (watts <= 0.0) return
         val app = context.applicationContext
-        if (prefs(app).getLong(KEY_START_AT, 0L) == 0L) return
-        val cur = prefs(app).getString(KEY_MAX_W, "0")!!.toDouble()
-        if (watts > cur) updateMaxWatts(app, watts)
+        synchronized(wattLock) {
+            if (prefs(app).getLong(KEY_START_AT, 0L) == 0L) return
+            val cur = prefs(app).getString(KEY_MAX_W, "0")!!.toDouble()
+            if (watts > cur) {
+                prefs(app).edit().putString(KEY_MAX_W, watts.toString()).apply()
+            }
+        }
     }
 
     suspend fun finalizeSession(context: Context) {
@@ -143,7 +131,6 @@ object ChargingSessionRecorder {
         }
     }
 
-    /** For [BroadcastReceiver] / non-suspending callers. */
     fun finalizeSessionBlocking(context: Context) {
         runBlocking { finalizeSession(context) }
     }

@@ -2,6 +2,7 @@ package com.volttrack.app.ui.main
 
 import android.app.Application
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -29,7 +30,6 @@ data class MainUiState(
     val batteryPercent: Double = 0.0,
     val displayWatts: Double = 0.0,
     val powerUnit: PowerUnit = PowerUnit.WATTS,
-    /** In-progress charge (prefs); null when unplugged or no session started. */
     val activeSession: ActiveChargingSession? = null,
     val sessions: List<ChargingSession> = emptyList(),
     val collapsedDayKeys: Set<Long> = emptySet()
@@ -84,7 +84,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var previousPlugged: Boolean? = null
             while (true) {
                 val app = getApplication<Application>()
-                val plugged = batteryMonitor.isExternalPowerConnected()
+
+                // Fetch the intent once to use efficiently across all battery checks in this tick
+                val batteryIntent = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+                val plugged = batteryMonitor.isExternalPowerConnected(batteryIntent)
                 if (previousPlugged != null) {
                     if (!previousPlugged && plugged) {
                         goalNotifiedThisSession = false
@@ -100,18 +104,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 previousPlugged = plugged
 
-                if (plugged && batteryMonitor.isBatteryChargingComplete()) {
+                if (plugged && batteryMonitor.isBatteryChargingComplete(batteryIntent)) {
                     ChargingSessionRecorder.noteChargeCompletedIfUnset(app)
                 }
 
-                val pct = batteryMonitor.getPrecisionLevel()
-                val sample = batteryMonitor.getCurrentWatts()
+                val pct = batteryMonitor.getPrecisionLevel(batteryIntent)
+                val sample = batteryMonitor.getCurrentWatts(batteryIntent)
                 if (plugged) {
                     ChargingSessionRecorder.considerWattSample(app, sample)
                 }
+
+                // THE FIX: Snap instantly to the first real reading
                 wattSmoothed = when {
                     sample <= 0.0 -> 0.0
-                    wattSmoothed < 0.0 -> sample
+                    wattSmoothed <= 0.0 && sample > 0.0 -> sample // Instantly bypass smoothing on the first positive read
                     else -> wattSmoothed * 0.55 + sample * 0.45
                 }
                 val nowMs = System.currentTimeMillis()
@@ -153,7 +159,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Call from [android.app.Activity.onStart] when the process may need to sync charging state. */
     fun onForegroundChargingCheck() {
         val app = getApplication<Application>()
         val bm = app.getSystemService(android.content.Context.BATTERY_SERVICE) as BatteryManager

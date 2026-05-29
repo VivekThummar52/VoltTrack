@@ -1,6 +1,8 @@
 package com.volttrack.app.ui.main
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
@@ -18,12 +20,15 @@ import com.volttrack.app.data.repository.SessionRepository
 import com.volttrack.app.logic.BatteryMonitor
 import com.volttrack.app.notification.NotificationHelper
 import com.volttrack.app.service.ChargingService
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicLong
 
 data class MainUiState(
@@ -49,10 +54,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var prefsSnapshot: UserPreferences = UserPreferences()
     private var goalNotifiedThisSession: Boolean = false
 
+    // Broadcast receiver to interrupt the polling delay on instant plug events
+    private var powerReceiver: BroadcastReceiver? = null
+    private val forceRefreshTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     init {
+        setupPowerReceiver(application)
         observeSessions()
         observePreferences()
         startBatteryAndChargingLoop()
+    }
+
+    private fun setupPowerReceiver(app: Application) {
+        powerReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                // Instantly notify the loop to wake up and process the UI update
+                forceRefreshTrigger.tryEmit(Unit)
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+
+        // Android 14+ requirement for dynamic receivers
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            app.registerReceiver(powerReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            app.registerReceiver(powerReceiver, filter)
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        powerReceiver?.let {
+            getApplication<Application>().unregisterReceiver(it)
+        }
     }
 
     private fun observePreferences() {
@@ -80,12 +117,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startBatteryAndChargingLoop() {
         viewModelScope.launch {
-            delay(750)
             var previousPlugged: Boolean? = null
-            while (true) {
+            while (isActive) {
                 val app = getApplication<Application>()
 
-                // Fetch the intent once to use efficiently across all battery checks in this tick
                 val batteryIntent = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
                 val plugged = batteryMonitor.isExternalPowerConnected(batteryIntent)
@@ -114,12 +149,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ChargingSessionRecorder.considerWattSample(app, sample)
                 }
 
-                // THE FIX: Snap instantly to the first real reading
                 wattSmoothed = when {
                     sample <= 0.0 -> 0.0
                     wattSmoothed <= 0.0 && sample > 0.0 -> sample // Instantly bypass smoothing on the first positive read
                     else -> wattSmoothed * 0.55 + sample * 0.45
                 }
+
                 val nowMs = System.currentTimeMillis()
                 val activeSession: ActiveChargingSession? =
                     if (plugged) ChargingSessionRecorder.readActiveSessionOrNull(app, pct, nowMs) else null
@@ -133,7 +168,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         activeSession = activeSession
                     )
                 }
-                delay(refreshIntervalMs.get())
+
+                // Wait for the refresh interval, but wake up instantly if the power receiver triggers
+                withTimeoutOrNull(refreshIntervalMs.get()) {
+                    forceRefreshTrigger.first()
+                }
             }
         }
     }
@@ -161,7 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onForegroundChargingCheck() {
         val app = getApplication<Application>()
-        val bm = app.getSystemService(android.content.Context.BATTERY_SERVICE) as BatteryManager
+        val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         if (bm.isCharging) {
             ChargingSessionRecorder.ensureSessionStartedIfCharging(app)
             tryStartChargingService(app)

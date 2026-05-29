@@ -73,6 +73,10 @@ class ChargingService : Service() {
                     maxWatts = currentWatts
                     ChargingSessionRecorder.updateMaxWatts(this@ChargingService, maxWatts)
                 }
+
+                // Write heartbeat data
+                ChargingSessionRecorder.updateSessionProgress(this@ChargingService, pct, System.currentTimeMillis())
+
                 val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(1, buildNotification(prefs, pct, currentWatts))
                 delay(interval)

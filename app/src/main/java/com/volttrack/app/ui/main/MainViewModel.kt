@@ -60,6 +60,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         setupPowerReceiver(application)
+        ChargingSessionRecorder.recoverOrphanedSessionIfUnplugged(application)
         observeSessions()
         observePreferences()
         startBatteryAndChargingLoop()
@@ -145,8 +146,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val pct = batteryMonitor.getPrecisionLevel(batteryIntent)
                 val sample = batteryMonitor.getCurrentWatts(batteryIntent)
+                val nowMs = System.currentTimeMillis()
+
                 if (plugged) {
                     ChargingSessionRecorder.considerWattSample(app, sample)
+                    ChargingSessionRecorder.updateSessionProgress(app, pct, nowMs)
                 }
 
                 wattSmoothed = when {
@@ -155,7 +159,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     else -> wattSmoothed * 0.55 + sample * 0.45
                 }
 
-                val nowMs = System.currentTimeMillis()
                 val activeSession: ActiveChargingSession? =
                     if (plugged) ChargingSessionRecorder.readActiveSessionOrNull(app, pct, nowMs) else null
 

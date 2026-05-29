@@ -5,7 +5,6 @@ import android.os.BatteryManager
 import com.volttrack.app.logic.BatteryMonitor
 import com.volttrack.app.notification.NotificationHelper
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -36,13 +35,13 @@ object ChargingSessionRecorder {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun beginChargingSession(context: Context) {
+    suspend fun beginChargingSession(context: Context) {
         val app = context.applicationContext
         val p = prefs(app)
 
         // If a session is already active but we are starting a new one, finalize it first
         if (p.getLong(KEY_START_AT, 0L) > 0L) {
-            finalizeSessionBlocking(app, isOrphaned = true)
+            finalizeSession(app, isOrphaned = true)
         }
 
         val pct = BatteryMonitor(app).getPrecisionLevel()
@@ -57,7 +56,7 @@ object ChargingSessionRecorder {
             .commit()
     }
 
-    fun ensureSessionStartedIfCharging(context: Context) {
+    suspend fun ensureSessionStartedIfCharging(context: Context) {
         val app = context.applicationContext
         val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         if (!bm.isCharging) return
@@ -65,7 +64,7 @@ object ChargingSessionRecorder {
         beginChargingSession(app)
     }
 
-    fun recoverOrphanedSessionIfUnplugged(context: Context) {
+    suspend fun recoverOrphanedSessionIfUnplugged(context: Context) {
         val app = context.applicationContext
         val p = prefs(app)
         if (p.getLong(KEY_START_AT, 0L) > 0L) {
@@ -77,7 +76,7 @@ object ChargingSessionRecorder {
             // Finalize if currently unplugged OR if battery dropped significantly
             // (meaning they unplugged, discharged, and plugged back in while app was dead)
             if (!isPlugged || currentPct < lastPct - 1.0) {
-                finalizeSessionBlocking(app, isOrphaned = true)
+                finalizeSession(app, isOrphaned = true)
             }
         }
     }
@@ -177,9 +176,5 @@ object ChargingSessionRecorder {
             NotificationHelper.showSessionSaved(app, withId)
             p.edit().clear().commit()
         }
-    }
-
-    fun finalizeSessionBlocking(context: Context, isOrphaned: Boolean = false) {
-        runBlocking { finalizeSession(context, isOrphaned) }
     }
 }

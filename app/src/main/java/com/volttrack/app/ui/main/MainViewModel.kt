@@ -60,7 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         setupPowerReceiver(application)
-        ChargingSessionRecorder.recoverOrphanedSessionIfUnplugged(application)
+        viewModelScope.launch {
+            ChargingSessionRecorder.recoverOrphanedSessionIfUnplugged(application)
+        }
         observeSessions()
         observePreferences()
         startBatteryAndChargingLoop()
@@ -202,11 +204,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onForegroundChargingCheck() {
-        val app = getApplication<Application>()
-        val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        if (bm.isCharging) {
-            ChargingSessionRecorder.ensureSessionStartedIfCharging(app)
-            tryStartChargingService(app)
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            if (bm.isCharging) {
+                ChargingSessionRecorder.ensureSessionStartedIfCharging(app)
+                tryStartChargingService(app)
+            }
         }
     }
 

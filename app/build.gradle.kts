@@ -27,6 +27,20 @@ android {
                 "proguard-rules.pro"
             )
         }
+
+        // ── Add this new build type ──
+        create("profile") {
+            initWith(getByName("debug"))
+            // Tells Android Studio to treat this like a debug build for signing
+            matchingFallbacks += listOf("debug")
+
+            // Disables the heavy debugger attachment, unlocking Release-like speeds
+            isDebuggable = false
+
+            // Optional: You can enable minification here if you want an exact
+            // replica of Release performance, but it will slow down build times.
+            isMinifyEnabled = false
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

@@ -12,11 +12,8 @@ data class SessionDaySection(
     val sessions: List<ChargingSession>
 )
 
-/** Aggregates for all charging sessions that started on the same calendar day. */
 data class DayChargeSummary(
-    /** Wall time spent in charging sessions (plug → unplug), summed. */
     val totalDurationMs: Long,
-    /** Sum of per-session (end − start) percentage points (can exceed 100 after discharge). */
     val totalGainPercent: Double,
     val sessionCount: Int
 )
@@ -63,7 +60,8 @@ object SessionUiFormatting {
         locale: Locale
     ): String {
         val gain = currentPct - startPct
-        return "So far +${String.format(locale, "%.2f", gain)}% in ${formatDurationWithSeconds(durationMs)}"
+        val sign = if (gain >= 0) "+" else ""
+        return "So far $sign${String.format(locale, "%.2f", gain)}% in ${formatDurationWithSeconds(durationMs)}"
     }
 
     fun formatDurationWithSeconds(durationMs: Long): String {
@@ -126,8 +124,9 @@ object SessionUiFormatting {
     /** First line for collapsed day header: time + cumulative %. */
     fun formatCollapsedSummaryLine1(summary: DayChargeSummary, locale: Locale): String {
         val dur = formatDurationWithSeconds(summary.totalDurationMs)
+        val sign = if (summary.totalGainPercent >= 0) "+" else ""
         val pct = String.format(locale, "%.2f", summary.totalGainPercent)
-        return "$dur on charger • +$pct% cumulative"
+        return "$dur on charger • $sign$pct% cumulative"
     }
 
     /** Second line: session count only. */

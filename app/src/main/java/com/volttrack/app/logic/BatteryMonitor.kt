@@ -45,6 +45,13 @@ class BatteryMonitor(private val context: Context) {
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
 
+        // 1. Get the exact integer percentage the OS is showing in the status bar
+        val systemPct = if (level >= 0 && scale > 0) {
+            (level.toDouble() / scale.toDouble()) * 100.0
+        } else {
+            -1.0
+        }
+
         val chargeCounter = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
 
         if (level >= 0 && scale > 0 && level >= scale &&
@@ -53,35 +60,45 @@ class BatteryMonitor(private val context: Context) {
             persistFullMicroAh(chargeCounter)
         }
 
+        var precisePct: Double? = null
+
         if (Build.VERSION.SDK_INT >= 34) {
             val chargeFull = bm.getLongProperty(PROPERTY_CHARGE_FULL)
-            percentageFromChargeAndFull(chargeCounter, chargeFull)?.let {
+            precisePct = percentageFromChargeAndFull(chargeCounter, chargeFull)
+            if (precisePct != null) {
                 persistFullMicroAh(chargeFull)
-                return it
             }
         }
 
-        val capacity = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        val unsupported = chargeCounter == Long.MIN_VALUE || capacity == Long.MIN_VALUE
-        val microAhPlausible = !unsupported &&
-            chargeCounter > 0 &&
-            capacity >= 100_000L &&
-            chargeCounter <= capacity * 115 / 100
+        if (precisePct == null) {
+            val capacity = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val unsupported = chargeCounter == Long.MIN_VALUE || capacity == Long.MIN_VALUE
+            val microAhPlausible = !unsupported &&
+                    chargeCounter > 0 &&
+                    capacity >= 100_000L &&
+                    chargeCounter <= capacity * 115 / 100
 
-        if (microAhPlausible) {
-            val pct = (chargeCounter.toDouble() / capacity.toDouble()) * 100.0
-            if (pct in 0.0..100.0) {
-                persistFullMicroAh(capacity)
-                return pct
+            if (microAhPlausible) {
+                val pct = (chargeCounter.toDouble() / capacity.toDouble()) * 100.0
+                if (pct in 0.0..100.0) {
+                    persistFullMicroAh(capacity)
+                    precisePct = pct
+                }
             }
         }
 
-        loadPersistedFullMicroAh().takeIf { it > 0L }?.let { ref ->
-            percentageFromChargeAndFull(chargeCounter, ref)?.let { return it }
+        if (precisePct == null) {
+            loadPersistedFullMicroAh().takeIf { it > 0L }?.let { ref ->
+                precisePct = percentageFromChargeAndFull(chargeCounter, ref)
+            }
         }
 
-        if (level < 0 || scale <= 0) return 0.0
-        return (level.toDouble() / scale.toDouble()) * 100.0
+        // --- DISCREPANCY FIX (OEM ANCHORING) ---
+        if (systemPct >= 0.0 && precisePct == null) {
+            return systemPct
+        }
+
+        return precisePct ?: 0.0
     }
 
     fun getCurrentWatts(batteryIntent: Intent? = null): Double {

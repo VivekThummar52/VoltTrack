@@ -1,6 +1,7 @@
 package com.volttrack.app.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.BatteryManager
 import com.volttrack.app.logic.BatteryMonitor
 import com.volttrack.app.notification.NotificationHelper
@@ -8,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import androidx.core.content.edit
 
 data class ActiveChargingSession(
     val startTime: Long,
@@ -39,13 +41,19 @@ object ChargingSessionRecorder {
         val app = context.applicationContext
         val p = prefs(app)
 
+        val startAt = p.getLong(KEY_START_AT, 0L)
+        val now = System.currentTimeMillis()
+
         // If a session is already active but we are starting a new one, finalize it first
-        if (p.getLong(KEY_START_AT, 0L) > 0L) {
+        if (startAt > 0L) {
+            // Debounce: Ignore concurrent triggers from the BroadcastReceiver and ViewModel loop
+            if (now - startAt < 2000L) {
+                return
+            }
             finalizeSession(app, isOrphaned = true)
         }
 
         val pct = BatteryMonitor(app).getPrecisionLevel()
-        val now = System.currentTimeMillis()
         p.edit()
             .putLong(KEY_START_AT, now)
             .putString(KEY_START_PCT, pct.toString())
@@ -161,6 +169,15 @@ object ChargingSessionRecorder {
                 endPct = BatteryMonitor(app).getPrecisionLevel()
             }
 
+            // MICRO-SESSION FILTER: Discard if < 10 seconds with zero gain
+            // Prevents DB spam and ghost notifications from race conditions or rapid plug/unplugs
+            val durationMs = endAt - startAt
+            val gain = endPct - startPct
+            if (durationMs < 10000L && gain <= 0.0) {
+                prefEmitAndClear(p)
+                return@withLock
+            }
+
             val session = ChargingSession(
                 startTime = startAt,
                 endTime = endAt,
@@ -174,7 +191,11 @@ object ChargingSessionRecorder {
             }
             val withId = session.copy(id = rowId.toInt())
             NotificationHelper.showSessionSaved(app, withId)
-            p.edit().clear().commit()
+            prefEmitAndClear(p)
         }
+    }
+
+    fun prefEmitAndClear(p: SharedPreferences) {
+        p.edit { clear() }
     }
 }

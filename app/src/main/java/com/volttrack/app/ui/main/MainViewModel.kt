@@ -54,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var prefsSnapshot: UserPreferences = UserPreferences()
     private var goalNotifiedThisSession: Boolean = false
 
+    private var lastKnownLevel: Int = -1
     // Broadcast receiver to interrupt the polling delay on instant plug events
     private var powerReceiver: BroadcastReceiver? = null
     private val forceRefreshTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -71,13 +72,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun setupPowerReceiver(app: Application) {
         powerReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                // Instantly notify the loop to wake up and process the UI update
-                forceRefreshTrigger.tryEmit(Unit)
+                if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    if (lastKnownLevel != -1 && level != lastKnownLevel) {
+                        lastKnownLevel = level
+                        // Instantly notify the loop to wake up and process the UI update on % change
+                        forceRefreshTrigger.tryEmit(Unit)
+                    } else if (lastKnownLevel == -1) {
+                        lastKnownLevel = level
+                    }
+                } else {
+                    // Instantly notify the loop for plug/unplug events
+                    forceRefreshTrigger.tryEmit(Unit)
+                }
             }
         }
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
         }
 
         // Android 14+ requirement for dynamic receivers

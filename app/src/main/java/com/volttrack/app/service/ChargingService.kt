@@ -3,6 +3,8 @@ package com.volttrack.app.service
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
@@ -30,54 +32,77 @@ class ChargingService : Service() {
     private var wattJob: Job? = null
     private val prefsRepo by lazy { PreferencesRepository.get(this) }
 
+    // DYNAMIC RECEIVER: This completely bypasses the Android 8.0 manifest block.
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            serviceScope.launch {
+                when (intent.action) {
+                    Intent.ACTION_POWER_CONNECTED -> {
+                        ChargingSessionRecorder.beginChargingSession(this@ChargingService)
+                        startTrackingLoop()
+                    }
+                    Intent.ACTION_POWER_DISCONNECTED -> {
+                        ChargingSessionRecorder.finalizeSession(this@ChargingService)
+                        stopTrackingLoop()
+                    }
+                }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         monitor = BatteryMonitor(this)
+
+        // Register the dynamic receiver so it listens 24/7
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+        registerReceiver(powerReceiver, filter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
-        val notification = buildNotification(UserPreferences(), 0.0, 0.0)
-        try {
-            startForeground(1, notification)
-        } catch (e: RuntimeException) {
-            if (e is SecurityException) {
-                stopSelf()
-                return START_NOT_STICKY
+
+        if (monitor.isExternalPowerConnected()) {
+            serviceScope.launch {
+                ChargingSessionRecorder.ensureSessionStartedIfCharging(this@ChargingService)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                e.javaClass.name == "android.app.ForegroundServiceStartNotAllowedException"
-            ) {
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            throw e
+            startTrackingLoop()
+        } else {
+            // Drop down to a quiet, minimized notification to keep the process alive
+            startForeground(1, buildIdleNotification())
         }
 
-        wattJob?.cancel()
+        // START_STICKY ensures the OS automatically restarts the service if memory gets low
+        return START_STICKY
+    }
+
+    private fun startTrackingLoop() {
         wattJob?.cancel()
         wattJob = serviceScope.launch {
             var maxWatts = 0.0
+            val prefs: UserPreferences = prefsRepo.userPreferences.first()
+
+            try {
+                startForeground(1, buildActiveNotification(prefs, monitor.getPrecisionLevel(), 0.0))
+            } catch (e: Exception) {
+                // Ignore Android 12+ background start exceptions
+            }
+
             while (isActive) {
-                val prefs: UserPreferences = prefsRepo.userPreferences.first()
                 val interval = prefs.refreshIntervalMs.coerceIn(
                     PreferencesRepository.REFRESH_MIN,
                     PreferencesRepository.REFRESH_MAX
                 )
 
-                // Fetch the intent once to use efficiently across checks
                 val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
-                // NEW: Rogue service kill-switch.
-                // If the app was swiped away and missed the unplug broadcast, this catches it.
+                // Rogue Service Kill-Switch (Keeps your Doze Mode logic safe)
                 if (!monitor.isExternalPowerConnected(batteryIntent)) {
                     ChargingSessionRecorder.finalizeSession(this@ChargingService, isOrphaned = true)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                    } else {
-                        stopForeground(true)
-                    }
-                    stopSelf()
+                    stopTrackingLoop()
                     break
                 }
 
@@ -88,23 +113,27 @@ class ChargingService : Service() {
                     ChargingSessionRecorder.updateMaxWatts(this@ChargingService, maxWatts)
                 }
 
-                // Write heartbeat data
                 ChargingSessionRecorder.updateSessionProgress(this@ChargingService, pct, System.currentTimeMillis())
 
                 val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(1, buildNotification(prefs, pct, currentWatts))
+                nm.notify(1, buildActiveNotification(prefs, pct, currentWatts))
                 delay(interval)
             }
         }
-        return START_STICKY
     }
 
-    private fun buildNotification(prefs: UserPreferences, pct: Double, watts: Double): android.app.Notification {
+    private fun stopTrackingLoop() {
+        wattJob?.cancel()
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(1, buildIdleNotification())
+    }
+
+    private fun buildActiveNotification(prefs: UserPreferences, pct: Double, watts: Double): android.app.Notification {
         val locale = Locale.getDefault()
         val powerLine = PowerDisplay.formatWatts(watts, prefs.powerUnit, locale)
         val text = "${String.format(locale, "%.2f", pct)}% · $powerLine"
         return NotificationCompat.Builder(this, NotificationChannels.CHARGING_SERVICE)
-            .setContentTitle("VoltTrack active")
+            .setContentTitle("VoltTrack Active")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_lock_idle_low_battery)
@@ -113,7 +142,18 @@ class ChargingService : Service() {
             .build()
     }
 
+    private fun buildIdleNotification(): android.app.Notification {
+        return NotificationCompat.Builder(this, NotificationChannels.CHARGING_SERVICE)
+            .setContentTitle("VoltTrack Monitoring")
+            .setContentText("Waiting for charger...")
+            .setSmallIcon(R.drawable.ic_lock_idle_low_battery)
+            .setPriority(NotificationCompat.PRIORITY_MIN) // Hides the icon from the top status bar
+            .setOngoing(true)
+            .build()
+    }
+
     override fun onDestroy() {
+        unregisterReceiver(powerReceiver)
         wattJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()

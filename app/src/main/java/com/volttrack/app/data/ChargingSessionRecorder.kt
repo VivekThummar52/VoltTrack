@@ -50,6 +50,13 @@ object ChargingSessionRecorder {
             if (now - startAt < 2000L) {
                 return
             }
+
+            // REBOOT PROTECTION: If the device just booted (uptime < 5 minutes),
+            // this is the OS waking up, not a physical plug-in. Do not split the session.
+            if (SystemClock.elapsedRealtime() < 300_000L) {
+                return
+            }
+
             finalizeSession(app, isOrphaned = true)
         }
 
@@ -94,8 +101,9 @@ object ChargingSessionRecorder {
             // Trigger recovery ONLY if:
             // 1. We are currently unplugged.
             // 2. OR The battery dropped by at least 1% (meaning they discharged while app was asleep).
-            // 3. OR The device rebooted/was dead and we woke up disconnected from the previous timeline.
-            if (!isPlugged || currentPct < lastPct - 1.0 || (isSeverelyStale && !isPlugged) || deviceRebooted) {
+            // 3. OR The heartbeat is severely stale AND we are currently unplugged.
+            // 4. OR The device rebooted AND we are currently unplugged.
+            if (!isPlugged || currentPct < lastPct - 1.0 || (isSeverelyStale && !isPlugged) || (deviceRebooted && !isPlugged)) {
                 finalizeSession(app, isOrphaned = true)
             }
         }
@@ -178,12 +186,13 @@ object ChargingSessionRecorder {
                 endAt = p.getLong(KEY_LAST_UPDATE_TIME, startAt).coerceAtLeast(startAt)
                 endPct = p.getString(KEY_LAST_UPDATE_PCT, startPct.toString())!!.toDouble()
             } else {
-                endAt = System.currentTimeMillis()
+                // coerceAtLeast prevents negative durations if the system clock is wrong after reboot
+                endAt = System.currentTimeMillis().coerceAtLeast(startAt)
                 endPct = BatteryMonitor(app).getPrecisionLevel()
             }
 
             // MICRO-SESSION FILTER: Discard if < 10 seconds with zero gain
-            val durationMs = endAt - startAt
+            val durationMs = (endAt - startAt).coerceAtLeast(0L)
             val gain = endPct - startPct
             if (durationMs < 10000L && gain <= 0.0) {
                 p.edit().clear().commit()

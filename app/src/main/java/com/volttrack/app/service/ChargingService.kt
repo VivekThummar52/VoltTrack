@@ -55,6 +55,7 @@ class ChargingService : Service() {
         }
 
         wattJob?.cancel()
+        wattJob?.cancel()
         wattJob = serviceScope.launch {
             var maxWatts = 0.0
             while (isActive) {
@@ -66,6 +67,19 @@ class ChargingService : Service() {
 
                 // Fetch the intent once to use efficiently across checks
                 val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+                // NEW: Rogue service kill-switch.
+                // If the app was swiped away and missed the unplug broadcast, this catches it.
+                if (!monitor.isExternalPowerConnected(batteryIntent)) {
+                    ChargingSessionRecorder.finalizeSession(this@ChargingService, isOrphaned = true)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        stopForeground(true)
+                    }
+                    stopSelf()
+                    break
+                }
 
                 val pct = monitor.getPrecisionLevel(batteryIntent)
                 val currentWatts = monitor.getCurrentWatts(batteryIntent)

@@ -1,15 +1,14 @@
 package com.volttrack.app.data
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.os.BatteryManager
+import android.os.SystemClock
 import com.volttrack.app.logic.BatteryMonitor
 import com.volttrack.app.notification.NotificationHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import androidx.core.content.edit
 
 data class ActiveChargingSession(
     val startTime: Long,
@@ -22,7 +21,7 @@ data class ActiveChargingSession(
 
 object ChargingSessionRecorder {
     private val finalizeMutex = Mutex()
-    private val wattLock = Any() // Thread lock for max watts check-then-act
+    private val wattLock = Any()
 
     private const val PREFS = "charging_session_active"
     private const val KEY_START_AT = "start_at_ms"
@@ -30,9 +29,10 @@ object ChargingSessionRecorder {
     private const val KEY_MAX_W = "max_w"
     private const val KEY_CHARGE_COMPLETED_AT = "charge_completed_at_ms"
 
-    // Heartbeat tracking for process-death recovery
-    private const val KEY_LAST_UPDATE_TIME = "last_update_time_ms"
+    // Heartbeat tracking
+    private const val KEY_LAST_UPDATE_TIME = "last_update_time_ms" // Wall-clock time for DB saving
     private const val KEY_LAST_UPDATE_PCT = "last_update_pct"
+    private const val KEY_LAST_HEARTBEAT_REALTIME = "last_heartbeat_realtime" // Monotonic clock for Doze/Staleness checks
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -43,10 +43,10 @@ object ChargingSessionRecorder {
 
         val startAt = p.getLong(KEY_START_AT, 0L)
         val now = System.currentTimeMillis()
+        val realTime = SystemClock.elapsedRealtime()
 
-        // If a session is already active but we are starting a new one, finalize it first
         if (startAt > 0L) {
-            // Debounce: Ignore concurrent triggers from the BroadcastReceiver and ViewModel loop
+            // Debounce: Ignore concurrent triggers from BroadcastReceiver and ViewModel loop
             if (now - startAt < 2000L) {
                 return
             }
@@ -59,6 +59,7 @@ object ChargingSessionRecorder {
             .putString(KEY_START_PCT, pct.toString())
             .putString(KEY_MAX_W, "0.0")
             .putLong(KEY_LAST_UPDATE_TIME, now)
+            .putLong(KEY_LAST_HEARTBEAT_REALTIME, realTime)
             .putString(KEY_LAST_UPDATE_PCT, pct.toString())
             .remove(KEY_CHARGE_COMPLETED_AT)
             .commit()
@@ -75,15 +76,26 @@ object ChargingSessionRecorder {
     suspend fun recoverOrphanedSessionIfUnplugged(context: Context) {
         val app = context.applicationContext
         val p = prefs(app)
-        if (p.getLong(KEY_START_AT, 0L) > 0L) {
+        val startAt = p.getLong(KEY_START_AT, 0L)
+
+        if (startAt > 0L) {
             val bm = BatteryMonitor(app)
             val isPlugged = bm.isExternalPowerConnected()
             val lastPct = p.getString(KEY_LAST_UPDATE_PCT, "0")!!.toDouble()
+            val lastRealTime = p.getLong(KEY_LAST_HEARTBEAT_REALTIME, SystemClock.elapsedRealtime())
             val currentPct = bm.getPrecisionLevel()
+            val currentRealTime = SystemClock.elapsedRealtime()
 
-            // Finalize if currently unplugged OR if battery dropped significantly
-            // (meaning they unplugged, discharged, and plugged back in while app was dead)
-            if (!isPlugged || currentPct < lastPct - 1.0) {
+            // Time jumps backwards if the device rebooted. Otherwise, check if > 30 minutes of silence
+            val timeSinceHeartbeat = currentRealTime - lastRealTime
+            val deviceRebooted = timeSinceHeartbeat < 0
+            val isSeverelyStale = timeSinceHeartbeat > 1800_000L // 30 minutes
+
+            // Trigger recovery ONLY if:
+            // 1. We are currently unplugged.
+            // 2. OR The battery dropped by at least 1% (meaning they discharged while app was asleep).
+            // 3. OR The device rebooted/was dead and we woke up disconnected from the previous timeline.
+            if (!isPlugged || currentPct < lastPct - 1.0 || (isSeverelyStale && !isPlugged) || deviceRebooted) {
                 finalizeSession(app, isOrphaned = true)
             }
         }
@@ -92,6 +104,7 @@ object ChargingSessionRecorder {
     fun updateSessionProgress(context: Context, pct: Double, nowMs: Long) {
         prefs(context.applicationContext).edit()
             .putLong(KEY_LAST_UPDATE_TIME, nowMs)
+            .putLong(KEY_LAST_HEARTBEAT_REALTIME, SystemClock.elapsedRealtime())
             .putString(KEY_LAST_UPDATE_PCT, pct.toString())
             .apply()
     }
@@ -170,11 +183,10 @@ object ChargingSessionRecorder {
             }
 
             // MICRO-SESSION FILTER: Discard if < 10 seconds with zero gain
-            // Prevents DB spam and ghost notifications from race conditions or rapid plug/unplugs
             val durationMs = endAt - startAt
             val gain = endPct - startPct
             if (durationMs < 10000L && gain <= 0.0) {
-                prefEmitAndClear(p)
+                p.edit().clear().commit()
                 return@withLock
             }
 
@@ -191,11 +203,7 @@ object ChargingSessionRecorder {
             }
             val withId = session.copy(id = rowId.toInt())
             NotificationHelper.showSessionSaved(app, withId)
-            prefEmitAndClear(p)
+            p.edit().clear().commit()
         }
-    }
-
-    fun prefEmitAndClear(p: SharedPreferences) {
-        p.edit { clear() }
     }
 }

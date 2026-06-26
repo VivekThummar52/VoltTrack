@@ -87,6 +87,7 @@ dependencies {
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     kapt("androidx.room:room-compiler:$roomVersion")
+    implementation(libs.androidx.work.runtime.ktx)
     // For Kotlin Symbol Processing (KSP) use this:
     // ksp("androidx.room:room-compiler:$room_version")
 }

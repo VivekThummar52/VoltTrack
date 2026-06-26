@@ -31,6 +31,9 @@ interface SessionDao {
     @Insert
     suspend fun insert(session: ChargingSession): Long
 
+    @Query("UPDATE sessions SET endPct = :pct, maxWatts = :watts, maxTemp = :temp WHERE startTime = :start")
+    suspend fun updateActiveSession(start: Long, pct: Double, watts: Double, temp: Double)
+
     @Query("SELECT * FROM sessions ORDER BY startTime DESC")
     fun getAll(): Flow<List<ChargingSession>>
 }

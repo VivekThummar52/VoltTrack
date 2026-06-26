@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.volttrack.app.R
 import com.volttrack.app.data.ChargingSessionRecorder
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 
 class ChargingService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
@@ -42,7 +45,8 @@ class ChargingService : Service() {
                         startTrackingLoop()
                     }
                     Intent.ACTION_POWER_DISCONNECTED -> {
-                        ChargingSessionRecorder.finalizeSession(this@ChargingService)
+                        Log.d("VoltTrack", "Disconnected, scheduling finalization")
+                        scheduleFinalization() // Hands off finalization to the OS
                         stopTrackingLoop()
                     }
                 }
@@ -67,7 +71,11 @@ class ChargingService : Service() {
 
         if (monitor.isExternalPowerConnected()) {
             serviceScope.launch {
-                ChargingSessionRecorder.ensureSessionStartedIfCharging(this@ChargingService)
+                // Force check: If we started but charger is NOT connected,
+                // clean up anything left over from the last crash/kill
+                if (!monitor.isExternalPowerConnected()) {
+                    ChargingSessionRecorder.finalizeSession(this@ChargingService, isOrphaned = true)
+                }
             }
             startTrackingLoop()
         } else {
@@ -102,7 +110,7 @@ class ChargingService : Service() {
 
                 // Rogue Service Kill-Switch (Keeps your Doze Mode logic safe)
                 if (!monitor.isExternalPowerConnected(batteryIntent)) {
-                    ChargingSessionRecorder.finalizeSession(this@ChargingService, isOrphaned = true)
+                    scheduleFinalization() // Hands off finalization to the OS
                     stopTrackingLoop()
                     break
                 }
@@ -116,6 +124,13 @@ class ChargingService : Service() {
                     if (currentTemp > maxTemp) maxTemp = currentTemp
                     ChargingSessionRecorder.updateMaxStats(this@ChargingService, maxWatts, maxTemp)
                 }
+
+                ChargingSessionRecorder.updateActiveSessionInDb(
+                    context = this@ChargingService,
+                    pct = pct,
+                    watts = currentWatts,
+                    temp = currentTemp
+                )
 
                 ChargingSessionRecorder.updateSessionProgress(this@ChargingService, pct, System.currentTimeMillis())
 
@@ -172,6 +187,11 @@ class ChargingService : Service() {
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
+    }
+
+    private fun scheduleFinalization() {
+        val workRequest = OneTimeWorkRequestBuilder<FinalizeSessionWorker>().build()
+        WorkManager.getInstance(this).enqueue(workRequest)
     }
 
     override fun onBind(intent: Intent?) = null

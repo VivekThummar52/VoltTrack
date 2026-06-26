@@ -131,4 +131,26 @@ class BatteryMonitor(private val context: Context) {
         val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
         return level >= 0 && scale > 0 && level >= scale
     }
+
+    fun getTemperature(batteryIntent: Intent? = null): Double {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ?: return 0.0
+        // Temperature is returned in tenths of a degree Celsius
+        return intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0
+    }
+
+    fun getHealthStatus(batteryIntent: Intent? = null): Int {
+        val intent = batteryIntent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ?: return BatteryManager.BATTERY_HEALTH_UNKNOWN
+        return intent.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)
+    }
+
+    fun getHealthPercent(): Int? {
+        if (Build.VERSION.SDK_INT >= 34) {
+            // BATTERY_PROPERTY_STATE_OF_HEALTH constant value is 10
+            val soh = bm.getIntProperty(10)
+            if (soh in 1..100) return soh
+        }
+        return null
+    }
 }

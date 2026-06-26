@@ -16,7 +16,8 @@ data class ActiveChargingSession(
     val currentPct: Double,
     val maxWatts: Double,
     val chargeCompletedAtMs: Long?,
-    val nowMs: Long
+    val nowMs: Long,
+    val maxTemp: Double
 )
 
 object ChargingSessionRecorder {
@@ -33,6 +34,7 @@ object ChargingSessionRecorder {
     private const val KEY_LAST_UPDATE_TIME = "last_update_time_ms" // Wall-clock time for DB saving
     private const val KEY_LAST_UPDATE_PCT = "last_update_pct"
     private const val KEY_LAST_HEARTBEAT_REALTIME = "last_heartbeat_realtime" // Monotonic clock for Doze/Staleness checks
+    private const val KEY_MAX_TEMP = "max_temp"
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -61,10 +63,12 @@ object ChargingSessionRecorder {
         }
 
         val pct = BatteryMonitor(app).getPrecisionLevel()
+        val temp = BatteryMonitor(app).getTemperature()
         p.edit()
             .putLong(KEY_START_AT, now)
             .putString(KEY_START_PCT, pct.toString())
             .putString(KEY_MAX_W, "0.0")
+            .putString(KEY_MAX_TEMP, temp.toString())
             .putLong(KEY_LAST_UPDATE_TIME, now)
             .putLong(KEY_LAST_HEARTBEAT_REALTIME, realTime)
             .putString(KEY_LAST_UPDATE_PCT, pct.toString())
@@ -117,11 +121,26 @@ object ChargingSessionRecorder {
             .apply()
     }
 
-    fun updateMaxWatts(context: Context, maxWatts: Double) {
+    fun updateMaxStats(context: Context, watts: Double, temp: Double) {
+        val app = context.applicationContext
         synchronized(wattLock) {
-            prefs(context.applicationContext).edit()
-                .putString(KEY_MAX_W, maxWatts.toString())
-                .apply()
+            val p = prefs(app)
+            if (p.getLong(KEY_START_AT, 0L) == 0L) return
+
+            val curW = p.getString(KEY_MAX_W, "0")!!.toDouble()
+            val curT = p.getString(KEY_MAX_TEMP, "0")!!.toDouble()
+            val edit = p.edit()
+            var changed = false
+
+            if (watts > curW) {
+                edit.putString(KEY_MAX_W, watts.toString())
+                changed = true
+            }
+            if (temp > curT) {
+                edit.putString(KEY_MAX_TEMP, temp.toString())
+                changed = true
+            }
+            if (changed) edit.apply()
         }
     }
 
@@ -145,26 +164,16 @@ object ChargingSessionRecorder {
         val startPct = p.getString(KEY_START_PCT, "0")!!.toDouble()
         val maxW = p.getString(KEY_MAX_W, "0")!!.toDouble()
         val completedAt = p.getLong(KEY_CHARGE_COMPLETED_AT, 0L).takeIf { it > 0L }
+        val maxTemp = p.getString(KEY_MAX_TEMP, "0")!!.toDouble()
         return ActiveChargingSession(
             startTime = startAt,
             startPct = startPct,
             currentPct = currentPct,
             maxWatts = maxW,
             chargeCompletedAtMs = completedAt,
-            nowMs = nowMs
+            nowMs = nowMs,
+            maxTemp = maxTemp
         )
-    }
-
-    fun considerWattSample(context: Context, watts: Double) {
-        if (watts <= 0.0) return
-        val app = context.applicationContext
-        synchronized(wattLock) {
-            if (prefs(app).getLong(KEY_START_AT, 0L) == 0L) return
-            val cur = prefs(app).getString(KEY_MAX_W, "0")!!.toDouble()
-            if (watts > cur) {
-                prefs(app).edit().putString(KEY_MAX_W, watts.toString()).apply()
-            }
-        }
     }
 
     suspend fun finalizeSession(context: Context, isOrphaned: Boolean = false) {
@@ -177,6 +186,7 @@ object ChargingSessionRecorder {
             val startPct = p.getString(KEY_START_PCT, "0")!!.toDouble()
             val maxW = p.getString(KEY_MAX_W, "0")!!.toDouble()
             val completedAt = p.getLong(KEY_CHARGE_COMPLETED_AT, 0L).takeIf { it > 0L }
+            val maxTemp = p.getString(KEY_MAX_TEMP, "0")!!.toDouble()
 
             val endAt: Long
             val endPct: Double
@@ -205,7 +215,8 @@ object ChargingSessionRecorder {
                 startPct = startPct,
                 endPct = endPct,
                 maxWatts = maxW,
-                chargeCompletedAtMs = completedAt
+                chargeCompletedAtMs = completedAt,
+                maxTemp = maxTemp
             )
             val rowId = withContext(Dispatchers.IO) {
                 AppDatabase.getDatabase(app).sessionDao().insert(session)

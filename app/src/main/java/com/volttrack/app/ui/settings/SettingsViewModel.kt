@@ -40,4 +40,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setGoalBatteryPercent(percent: Int) {
         viewModelScope.launch { repository.setGoalBatteryPercent(percent) }
     }
+
+    fun setAlertOverheat(enabled: Boolean) {
+        viewModelScope.launch { repository.setAlertOverheat(enabled) }
+    }
+
+    fun setAlertSlowCharging(enabled: Boolean) {
+        viewModelScope.launch { repository.setAlertSlowCharging(enabled) }
+    }
+
+    fun setOverheatThreshold(enabled: Double) {
+        viewModelScope.launch { repository.setOverheatThreshold(enabled) }
+    }
+
+    fun setSlowChargingThreshold(limit: Double, isCustom: Boolean) {
+        viewModelScope.launch {
+            repository.setSlowChargingThreshold(limit, isCustom)
+        }
+    }
 }

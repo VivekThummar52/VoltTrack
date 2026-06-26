@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.volttrack.app.notification.AlertManager
 
 class ChargingService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
@@ -118,6 +119,7 @@ class ChargingService : Service() {
                 val pct = monitor.getPrecisionLevel(batteryIntent)
                 val currentWatts = monitor.getCurrentWatts(batteryIntent)
                 val currentTemp = monitor.getTemperature(batteryIntent)
+                AlertManager.checkAndNotify(this@ChargingService, prefs, currentTemp, currentWatts)
 
                 if (currentWatts > maxWatts || currentTemp > maxTemp) {
                     if (currentWatts > maxWatts) maxWatts = currentWatts

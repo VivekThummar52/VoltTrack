@@ -6,6 +6,7 @@ import android.os.SystemClock
 import com.volttrack.app.logic.BatteryMonitor
 import com.volttrack.app.notification.NotificationHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -204,7 +205,8 @@ object ChargingSessionRecorder {
             // MICRO-SESSION FILTER: Discard if < 10 seconds with zero gain
             val durationMs = (endAt - startAt).coerceAtLeast(0L)
             val gain = endPct - startPct
-            if (durationMs < 10000L && gain <= 0.0) {
+            // Only filter if we aren't being forced to finalize from a worker/kill-event
+            if (!isOrphaned && durationMs < 10000L && gain <= 0.0) {
                 p.edit().clear().commit()
                 return@withLock
             }
@@ -224,6 +226,24 @@ object ChargingSessionRecorder {
             val withId = session.copy(id = rowId.toInt())
             NotificationHelper.showSessionSaved(app, withId)
             p.edit().clear().commit()
+        }
+    }
+
+    // Add this new function to ChargingSessionRecorder.kt
+    fun updateActiveSessionInDb(context: Context, pct: Double, watts: Double, temp: Double) {
+        val app = context.applicationContext
+        val p = prefs(app)
+        val startAt = p.getLong(KEY_START_AT, 0L)
+        if (startAt == 0L) return
+
+        // Run this update in a coroutine scope
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+            AppDatabase.getDatabase(app).sessionDao().updateActiveSession(
+                start = startAt,
+                pct = pct,
+                watts = watts,
+                temp = temp
+            )
         }
     }
 }

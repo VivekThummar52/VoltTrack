@@ -157,6 +157,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val hPercent = batteryMonitor.getHealthPercent()
 
                 if (plugged) {
+                    ChargingSessionRecorder.updateActiveSessionInDb(app, pct, sample, temp)
                     ChargingSessionRecorder.updateMaxStats(app, sample, temp)
                     ChargingSessionRecorder.updateSessionProgress(app, pct, nowMs)
                 }

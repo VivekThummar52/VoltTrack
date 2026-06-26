@@ -37,7 +37,10 @@ data class MainUiState(
     val powerUnit: PowerUnit = PowerUnit.WATTS,
     val activeSession: ActiveChargingSession? = null,
     val sessions: List<ChargingSession> = emptyList(),
-    val collapsedDayKeys: Set<Long> = emptySet()
+    val collapsedDayKeys: Set<Long> = emptySet(),
+    val temperatureC: Double = 0.0,
+    val healthStatus: Int = android.os.BatteryManager.BATTERY_HEALTH_UNKNOWN,
+    val healthPercent: Int? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -149,9 +152,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val pct = batteryMonitor.getPrecisionLevel(batteryIntent)
                 val sample = batteryMonitor.getCurrentWatts(batteryIntent)
                 val nowMs = System.currentTimeMillis()
+                val temp = batteryMonitor.getTemperature(batteryIntent)
+                val hStatus = batteryMonitor.getHealthStatus(batteryIntent)
+                val hPercent = batteryMonitor.getHealthPercent()
 
                 if (plugged) {
-                    ChargingSessionRecorder.considerWattSample(app, sample)
+                    ChargingSessionRecorder.updateMaxStats(app, sample, temp)
                     ChargingSessionRecorder.updateSessionProgress(app, pct, nowMs)
                 }
 
@@ -170,7 +176,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         batteryPercent = pct,
                         displayWatts = wattSmoothed,
-                        activeSession = activeSession
+                        activeSession = activeSession,
+                        temperatureC = temp,
+                        healthStatus = hStatus,
+                        healthPercent = hPercent
                     )
                 }
 

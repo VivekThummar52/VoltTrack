@@ -7,7 +7,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -20,7 +19,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -31,6 +29,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.volttrack.app.data.preferences.PreferencesRepository
 import com.volttrack.app.ui.charts.ChartsScreen
+import com.volttrack.app.ui.components.LoadingScreen
 import com.volttrack.app.ui.main.MainScreen
 import com.volttrack.app.ui.main.MainViewModel
 import com.volttrack.app.ui.onboarding.OnboardingScreen
@@ -55,13 +54,18 @@ fun VoltTrackNavHost(
     val context = LocalContext.current
     val prefsRepo = remember { PreferencesRepository.get(context) }
     var startDestination by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         val done = prefsRepo.userPreferences.first().onboardingComplete
         startDestination = if (done) Routes.HOME else Routes.ONBOARDING
     }
+
     if (startDestination == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        androidx.compose.material3.Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            LoadingScreen("Setting up VoltTrack...")
         }
         return
     }

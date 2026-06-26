@@ -83,6 +83,7 @@ class ChargingService : Service() {
         wattJob?.cancel()
         wattJob = serviceScope.launch {
             var maxWatts = 0.0
+            var maxTemp = 0.0
             val prefs: UserPreferences = prefsRepo.userPreferences.first()
 
             try {
@@ -108,9 +109,12 @@ class ChargingService : Service() {
 
                 val pct = monitor.getPrecisionLevel(batteryIntent)
                 val currentWatts = monitor.getCurrentWatts(batteryIntent)
-                if (currentWatts > maxWatts) {
-                    maxWatts = currentWatts
-                    ChargingSessionRecorder.updateMaxWatts(this@ChargingService, maxWatts)
+                val currentTemp = monitor.getTemperature(batteryIntent)
+
+                if (currentWatts > maxWatts || currentTemp > maxTemp) {
+                    if (currentWatts > maxWatts) maxWatts = currentWatts
+                    if (currentTemp > maxTemp) maxTemp = currentTemp
+                    ChargingSessionRecorder.updateMaxStats(this@ChargingService, maxWatts, maxTemp)
                 }
 
                 ChargingSessionRecorder.updateSessionProgress(this@ChargingService, pct, System.currentTimeMillis())

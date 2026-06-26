@@ -22,7 +22,8 @@ data class ChargingSession(
     val endPct: Double,
     val maxWatts: Double,
     /** Wall-clock instant when the OS reported full/100% while still plugged, if observed. */
-    val chargeCompletedAtMs: Long? = null
+    val chargeCompletedAtMs: Long? = null,
+    val maxTemp: Double = 0.0
 )
 
 @Dao
@@ -34,7 +35,7 @@ interface SessionDao {
     fun getAll(): Flow<List<ChargingSession>>
 }
 
-@Database(entities = [ChargingSession::class], version = 2)
+@Database(entities = [ChargingSession::class], version = 3)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
 
@@ -45,11 +46,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN maxTemp REAL NOT NULL DEFAULT 0.0")
+            }
+        }
+
         @Volatile private var instance: AppDatabase? = null
         fun getDatabase(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 Room.databaseBuilder(context, AppDatabase::class.java, "volt_db")
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

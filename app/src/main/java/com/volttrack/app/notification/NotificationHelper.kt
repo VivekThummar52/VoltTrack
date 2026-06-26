@@ -78,4 +78,21 @@ object NotificationHelper {
             .build()
         nm.notify(ID_GOAL, n)
     }
+
+    // Replace the previous implementation with this flexible version
+    fun showSimpleAlert(context: Context, title: String, message: String) {
+        if (!canPostNotifications(context)) return
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val n = NotificationCompat.Builder(context, NotificationChannels.GOALS)
+            .setSmallIcon(R.drawable.ic_lock_idle_low_battery)
+            .setContentTitle(title)
+            .setContentText(message) // Use the passed string directly
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentIntent(mainActivityIntent(context, requestCode = 2))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        nm.notify(3001, n)
+    }
 }

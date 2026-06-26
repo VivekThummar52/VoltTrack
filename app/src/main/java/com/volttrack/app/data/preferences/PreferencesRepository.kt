@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -27,7 +28,12 @@ class PreferencesRepository(private val context: Context) {
                 ?: PowerUnit.WATTS,
             refreshIntervalMs = p[KEY_REFRESH_MS]?.coerceIn(REFRESH_MIN, REFRESH_MAX) ?: 2000L,
             goalEnabled = p[KEY_GOAL_ENABLED] ?: false,
-            goalBatteryPercent = (p[KEY_GOAL_PCT] ?: 80).coerceIn(50, 100)
+            goalBatteryPercent = (p[KEY_GOAL_PCT] ?: 80).coerceIn(50, 100),
+            alertOverheat = p[KEY_ALERT_OVERHEAT] ?: true,
+            alertSlowCharging = p[KEY_ALERT_SLOW] ?: false,
+            alertOverheatThreshold = p[KEY_OVERHEAT_LIMIT] ?: 40.0,
+            alertSlowChargingThreshold = p[KEY_SLOW_LIMIT] ?: 2.0,
+            isCustomSlowThreshold = p[KEY_IS_CUSTOM_SLOW] ?: false
         )
     }
 
@@ -55,6 +61,28 @@ class PreferencesRepository(private val context: Context) {
         appContext.dataStore.edit { it[KEY_GOAL_PCT] = percent.coerceIn(50, 100) }
     }
 
+    suspend fun setAlertOverheat(enabled: Boolean) {
+        appContext.dataStore.edit { it[KEY_ALERT_OVERHEAT] = enabled }
+    }
+
+    suspend fun setAlertSlowCharging(enabled: Boolean) {
+        appContext.dataStore.edit { it[KEY_ALERT_SLOW] = enabled }
+    }
+
+    suspend fun setOverheatThreshold(limit: Double) {
+        appContext.dataStore.edit { it[KEY_OVERHEAT_LIMIT] = limit }
+    }
+    suspend fun setSlowChargingThreshold(limit: Double) {
+        appContext.dataStore.edit { it[KEY_SLOW_LIMIT] = limit }
+    }
+
+    suspend fun setSlowChargingThreshold(limit: Double, isCustom: Boolean) {
+        appContext.dataStore.edit {
+            it[KEY_SLOW_LIMIT] = limit
+            it[KEY_IS_CUSTOM_SLOW] = isCustom
+        }
+    }
+
     companion object {
         private val KEY_ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
         private val KEY_THEME = stringPreferencesKey("theme")
@@ -62,6 +90,12 @@ class PreferencesRepository(private val context: Context) {
         private val KEY_REFRESH_MS = longPreferencesKey("refresh_ms")
         private val KEY_GOAL_ENABLED = booleanPreferencesKey("goal_enabled")
         private val KEY_GOAL_PCT = intPreferencesKey("goal_pct")
+        private val KEY_ALERT_OVERHEAT = booleanPreferencesKey("alert_overheat")
+        private val KEY_ALERT_SLOW = booleanPreferencesKey("alert_slow")
+
+        private val KEY_OVERHEAT_LIMIT = doublePreferencesKey("overheat_limit")
+        private val KEY_SLOW_LIMIT = doublePreferencesKey("slow_limit")
+        private val KEY_IS_CUSTOM_SLOW = booleanPreferencesKey("is_custom_slow")
 
         const val REFRESH_MIN = 1000L
         const val REFRESH_MAX = 10_000L

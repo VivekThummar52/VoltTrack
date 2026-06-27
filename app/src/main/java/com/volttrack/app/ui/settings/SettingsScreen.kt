@@ -1,8 +1,8 @@
 package com.volttrack.app.ui.settings
 
+import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,10 +46,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.volttrack.app.data.preferences.PowerUnit
 import com.volttrack.app.data.preferences.ThemePreference
+import com.volttrack.app.data.preferences.UserPreferences
+import com.volttrack.app.ui.theme.VoltTrackTheme
 
 @Composable
 fun SettingsScreen(
@@ -57,6 +60,35 @@ fun SettingsScreen(
     onOpenPrivacy: () -> Unit
 ) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
+
+    SettingsScreenContent(
+        prefs = prefs,
+        onSetTheme = viewModel::setTheme,
+        onSetPowerUnit = viewModel::setPowerUnit,
+        onSetOverheatThreshold = viewModel::setOverheatThreshold,
+        onSetSlowChargingThreshold = viewModel::setSlowChargingThreshold,
+        onSetRefreshIntervalMs = viewModel::setRefreshIntervalMs,
+        onSetGoalEnabled = viewModel::setGoalEnabled,
+        onSetGoalBatteryPercent = viewModel::setGoalBatteryPercent,
+        onOpenPrivacy = onOpenPrivacy
+    )
+}
+
+@Composable
+fun SettingsScreenContent(
+    prefs: UserPreferences,
+    onSetTheme: (ThemePreference) -> Unit,
+    onSetPowerUnit: (PowerUnit) -> Unit,
+    onSetOverheatThreshold: (Double) -> Unit,
+    onSetSlowChargingThreshold: (Double, Boolean) -> Unit,
+    onSetRefreshIntervalMs: (Long) -> Unit,
+    onSetGoalEnabled: (Boolean) -> Unit,
+    onSetGoalBatteryPercent: (Int) -> Unit,
+    onOpenPrivacy: () -> Unit
+) {
+    var textFieldValue by remember(prefs.alertSlowChargingThreshold) {
+        mutableStateOf(if (prefs.isCustomSlowThreshold) prefs.alertSlowChargingThreshold.toInt().toString() else "")
+    }
 
     Column(
         modifier = Modifier
@@ -83,7 +115,7 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                                 .selectable(
                                     selected = prefs.theme == mode,
-                                    onClick = { viewModel.setTheme(mode) },
+                                    onClick = { onSetTheme(mode) },
                                     role = Role.RadioButton
                                 )
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -124,7 +156,7 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                                 .selectable(
                                     selected = prefs.powerUnit == unit,
-                                    onClick = { viewModel.setPowerUnit(unit) },
+                                    onClick = { onSetPowerUnit(unit) },
                                     role = Role.RadioButton
                                 )
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -148,56 +180,6 @@ fun SettingsScreen(
             }
         }
 
-        // Add this card inside your Column of Cards
-//        Card(
-//            modifier = Modifier.fillMaxWidth(),
-//            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
-//        ) {
-//            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-//                Text("Alerts", style = MaterialTheme.typography.titleMedium)
-//
-//                // Overheat Threshold Selection
-//                Column {
-//                    Text("Overheat threshold (°C)", style = MaterialTheme.typography.titleSmall)
-//                    Row(Modifier.selectableGroup()) {
-//                        listOf(35.0, 40.0, 45.0).forEach { limit ->
-//                            Row(
-//                                Modifier.selectable(
-//                                    selected = prefs.alertOverheatThreshold == limit,
-//                                    onClick = { viewModel.setOverheatThreshold(limit) },
-//                                    role = Role.RadioButton
-//                                ).padding(end = 16.dp),
-//                                verticalAlignment = Alignment.CenterVertically
-//                            ) {
-//                                RadioButton(selected = prefs.alertOverheatThreshold == limit, onClick = null)
-//                                Text("${limit.toInt()}°C", modifier = Modifier.padding(start = 4.dp))
-//                            }
-//                        }
-//                    }
-//                }
-//
-//                // Slow Charging Threshold Selection
-//                Column {
-//                    Text("Slow charging threshold (W)", style = MaterialTheme.typography.titleSmall)
-//                    Row(Modifier.selectableGroup().horizontalScroll(rememberScrollState())) {
-//                        listOf(1.0, 2.0, 5.0).forEach { limit ->
-//                            Row(
-//                                Modifier.selectable(
-//                                    selected = prefs.alertSlowChargingThreshold == limit,
-//                                    onClick = { viewModel.setSlowChargingThreshold(limit) },
-//                                    role = Role.RadioButton
-//                                ).padding(end = 16.dp),
-//                                verticalAlignment = Alignment.CenterVertically
-//                            ) {
-//                                RadioButton(selected = prefs.alertSlowChargingThreshold == limit, onClick = null)
-//                                Text("${limit.toInt()}W", modifier = Modifier.padding(start = 4.dp))
-//                            }
-//                        }
-//                    }
-//                }
-//            }
-//        }
-
         // --- Unified Alerts Card ---
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -213,7 +195,7 @@ fun SettingsScreen(
                         Text("Overheat threshold (°C)", style = MaterialTheme.typography.titleSmall)
                     }
                     SegmentedSelectionRow(listOf(35.0, 40.0, 45.0), prefs.alertOverheatThreshold, "°C") {
-                        viewModel.setOverheatThreshold(it)
+                        onSetOverheatThreshold(it)
                     }
                     Text("Receive an alert when battery temperature exceeds this limit.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -228,31 +210,23 @@ fun SettingsScreen(
                         Text("Slow charging threshold (W)", style = MaterialTheme.typography.titleSmall)
                     }
                     SegmentedSelectionRow(listOf(1.0, 2.0, 5.0), prefs.alertSlowChargingThreshold, "W") {
-                        viewModel.setSlowChargingThreshold(it, false)
-                    }
-
-                    var textFieldValue by remember(prefs.alertSlowChargingThreshold) {
-                        mutableStateOf(if (prefs.isCustomSlowThreshold) prefs.alertSlowChargingThreshold.toInt().toString() else "")
+                        onSetSlowChargingThreshold(it, false)
                     }
 
                     OutlinedTextField(
                         value = textFieldValue,
                         onValueChange = { input ->
-                            // 1. Only allow digits
                             if (input.all { it.isDigit() }) {
                                 val valInt = input.toIntOrNull() ?: 0
-
-                                // 2. Validation: Limit to 300
                                 if (valInt <= 300) {
                                     textFieldValue = input
                                     if (valInt > 0) {
-                                        viewModel.setSlowChargingThreshold(valInt.toDouble(), true)
+                                        onSetSlowChargingThreshold(valInt.toDouble(), true)
                                     }
                                 }
                             }
                         },
                         label = { Text("Custom threshold (W)") },
-                        // This provides the hint when the box is empty
                         placeholder = { Text("Max 300W") },
                         isError = textFieldValue.isNotEmpty() && (textFieldValue.toIntOrNull() ?: 0) > 300,
                         modifier = Modifier.fillMaxWidth(),
@@ -265,7 +239,6 @@ fun SettingsScreen(
 
                 // 3. Info Box inside the same card
                 Surface(
-                    // use surfaceContainerHigh for a more visible background in light mode
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -276,7 +249,6 @@ fun SettingsScreen(
                         Icon(
                             Icons.Filled.Info,
                             contentDescription = null,
-                            // Use onSurfaceVariant to ensure the icon is visible against the background
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
@@ -284,7 +256,6 @@ fun SettingsScreen(
                         Text(
                             text = "Alerts will appear as notifications while charging. You can change these anytime.",
                             style = MaterialTheme.typography.bodySmall,
-                            // Explicitly set the text color to onSurface for maximum legibility
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -312,7 +283,7 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                                 .selectable(
                                     selected = prefs.refreshIntervalMs == ms,
-                                    onClick = { viewModel.setRefreshIntervalMs(ms) },
+                                    onClick = { onSetRefreshIntervalMs(ms) },
                                     role = Role.RadioButton
                                 )
                                 .padding(vertical = 6.dp),
@@ -352,7 +323,7 @@ fun SettingsScreen(
                     }
                     Switch(
                         checked = prefs.goalEnabled,
-                        onCheckedChange = { viewModel.setGoalEnabled(it) }
+                        onCheckedChange = { onSetGoalEnabled(it) }
                     )
                 }
                 if (prefs.goalEnabled) {
@@ -362,7 +333,7 @@ fun SettingsScreen(
                     )
                     Slider(
                         value = prefs.goalBatteryPercent.toFloat(),
-                        onValueChange = { viewModel.setGoalBatteryPercent(it.toInt()) },
+                        onValueChange = { onSetGoalBatteryPercent(it.toInt()) },
                         valueRange = 50f..100f,
                         steps = 49
                     )
@@ -430,5 +401,59 @@ fun SegmentedSelectionRow(
                 }
             }
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun SettingsScreenPreview() {
+    VoltTrackTheme {
+        SettingsScreenContent(
+            prefs = UserPreferences(
+                theme = ThemePreference.SYSTEM,
+                powerUnit = PowerUnit.WATTS,
+                refreshIntervalMs = 2000L,
+                goalEnabled = true,
+                goalBatteryPercent = 80,
+                alertOverheatThreshold = 40.0,
+                alertSlowChargingThreshold = 2.0,
+                isCustomSlowThreshold = false
+            ),
+            onSetTheme = {},
+            onSetPowerUnit = {},
+            onSetOverheatThreshold = {},
+            onSetSlowChargingThreshold = { _, _ -> },
+            onSetRefreshIntervalMs = {},
+            onSetGoalEnabled = {},
+            onSetGoalBatteryPercent = {},
+            onOpenPrivacy = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun SettingsScreenDarkPreview() {
+    VoltTrackTheme(darkTheme = true) {
+        SettingsScreenContent(
+            prefs = UserPreferences(
+                theme = ThemePreference.DARK,
+                powerUnit = PowerUnit.WATTS,
+                refreshIntervalMs = 2000L,
+                goalEnabled = true,
+                goalBatteryPercent = 85,
+                alertOverheatThreshold = 45.0,
+                alertSlowChargingThreshold = 5.0,
+                isCustomSlowThreshold = true
+            ),
+            onSetTheme = {},
+            onSetPowerUnit = {},
+            onSetOverheatThreshold = {},
+            onSetSlowChargingThreshold = { _, _ -> },
+            onSetRefreshIntervalMs = {},
+            onSetGoalEnabled = {},
+            onSetGoalBatteryPercent = {},
+            onOpenPrivacy = {}
+        )
     }
 }

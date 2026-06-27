@@ -18,7 +18,7 @@ fun SystemBarsForContent(darkTheme: Boolean) {
     val backgroundColor = MaterialTheme.colorScheme.background.toArgb()
 
     SideEffect {
-        val window = (view.context as Activity).window
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
 
         // Match the status bar color to the current app theme background
         window.statusBarColor = backgroundColor

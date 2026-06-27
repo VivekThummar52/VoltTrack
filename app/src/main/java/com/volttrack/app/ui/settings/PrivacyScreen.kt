@@ -1,5 +1,6 @@
 package com.volttrack.app.ui.settings
 
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.volttrack.app.ui.theme.VoltTrackTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,5 +87,21 @@ fun PrivacyScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun PrivacyScreenPreview() {
+    VoltTrackTheme {
+        PrivacyScreen(onBack = {})
+    }
+}
+
+@Preview(showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun PrivacyScreenDarkPreview() {
+    VoltTrackTheme(darkTheme = true) {
+        PrivacyScreen(onBack = {})
     }
 }

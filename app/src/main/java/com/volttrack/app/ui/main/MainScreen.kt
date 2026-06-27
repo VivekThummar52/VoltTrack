@@ -1,5 +1,6 @@
 package com.volttrack.app.ui.main
 
+import android.os.BatteryManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -16,19 +17,29 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,31 +47,35 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.volttrack.app.ui.PowerDisplay
-import com.volttrack.app.ui.SessionUiFormatting
-import java.util.Locale
-import android.os.BatteryManager
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CheckCircleOutline
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Thermostat
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.BatteryFull
-import androidx.compose.material3.Surface
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.volttrack.app.data.ActiveChargingSession
+import com.volttrack.app.data.ChargingSession
+import com.volttrack.app.data.preferences.PowerUnit
+import com.volttrack.app.ui.PowerDisplay
+import com.volttrack.app.ui.SessionUiFormatting
+import com.volttrack.app.ui.theme.VoltTrackTheme
+import java.util.Locale
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    MainScreenContent(
+        uiState = uiState,
+        onToggleDaySection = { viewModel.toggleDaySection(it) }
+    )
+}
+
+@Composable
+fun MainScreenContent(
+    uiState: MainUiState,
+    onToggleDaySection: (Long) -> Unit
+) {
     val locale = Locale.getDefault()
     val groupedSessions = remember(uiState.sessions, locale) {
         SessionUiFormatting.groupSessionsByDay(uiState.sessions, locale)
@@ -158,7 +173,7 @@ fun MainScreen(viewModel: MainViewModel) {
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            viewModel.toggleDaySection(section.daySortKey)
+                                            onToggleDaySection(section.daySortKey)
                                         }
                                         .padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -433,5 +448,44 @@ private fun HealthBadge(healthStatus: Int) {
             Spacer(modifier = Modifier.width(4.dp))
             Text(text, color = color, style = MaterialTheme.typography.labelMedium)
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun MainScreenPreview() {
+    VoltTrackTheme {
+        MainScreenContent(
+            uiState = MainUiState(
+                batteryPercent = 75.42,
+                displayWatts = 15.5,
+                powerUnit = PowerUnit.WATTS,
+                activeSession = ActiveChargingSession(
+                    startTime = System.currentTimeMillis() - 3600000,
+                    startPct = 20.0,
+                    currentPct = 75.42,
+                    maxWatts = 18.5,
+                    chargeCompletedAtMs = null,
+                    nowMs = System.currentTimeMillis(),
+                    maxTemp = 35.0
+                ),
+                sessions = listOf(
+                    ChargingSession(
+                        id = 2,
+                        startTime = System.currentTimeMillis() - 86400000,
+                        endTime = System.currentTimeMillis() - 86400000 + 3600000,
+                        startPct = 10.0,
+                        endPct = 80.0,
+                        maxWatts = 20.0,
+                        chargeCompletedAtMs = null,
+                        maxTemp = 38.0
+                    )
+                ),
+                temperatureC = 32.5,
+                healthStatus = BatteryManager.BATTERY_HEALTH_GOOD,
+                healthPercent = 98
+            ),
+            onToggleDaySection = {}
+        )
     }
 }

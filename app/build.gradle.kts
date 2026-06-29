@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.volttrack.app"
+    namespace = "com.codecraft.volttrack"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.volttrack.app"
+        applicationId = "com.codecraft.volttrack"
         minSdk = 25
         targetSdk = 36
         versionCode = 1

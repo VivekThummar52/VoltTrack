@@ -121,7 +121,7 @@ flowchart LR
 | **System** | `ChargingService` (foreground, `dataSync` type), `PowerReceiver` (power connect/disconnect broadcasts) |
 
 ```
-com.volttrack.app
+com.codecraft.volttrack
 ├── MainActivity.kt
 ├── VoltTrackApplication.kt         # Notification channel setup on app start
 ├── data/
@@ -236,7 +236,7 @@ The project has three test suites:
 
 | Field | Value |
 |-------|-------|
-| **Application ID** | `com.volttrack.app` |
+| **Application ID** | `com.codecraft.volttrack` |
 | **Version name** | `1.0` |
 | **Version code** | `1` |
 

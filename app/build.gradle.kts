@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.volttrack.app"
+    namespace = "com.codecraft.volttrack"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.volttrack.app"
+        applicationId = "com.codecraft.volttrack"
         minSdk = 25
         targetSdk = 36
         versionCode = 1
@@ -80,13 +80,14 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
     // Room Database
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     kapt("androidx.room:room-compiler:$roomVersion")
+    implementation(libs.androidx.work.runtime.ktx)
     // For Kotlin Symbol Processing (KSP) use this:
     // ksp("androidx.room:room-compiler:$room_version")
 }

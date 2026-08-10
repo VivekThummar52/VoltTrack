@@ -26,7 +26,10 @@ fun VoltTrackAppContent(
         ThemePreference.DARK -> true
         ThemePreference.SYSTEM -> isSystemInDarkTheme()
     }
-    VoltTrackTheme(darkTheme = darkTheme) {
+    VoltTrackTheme(
+        darkTheme = darkTheme,
+        themeColor = prefs.themeColor
+    ) {
         SystemBarsForContent(darkTheme = darkTheme)
         VoltTrackNavHost(
             mainViewModel = mainViewModel,

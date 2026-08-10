@@ -2,6 +2,7 @@ package com.codecraft.volttrack.ui.settings
 
 import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,10 +20,16 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +49,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -49,6 +58,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.codecraft.volttrack.data.preferences.AppThemeColor
 import com.codecraft.volttrack.data.preferences.PowerUnit
 import com.codecraft.volttrack.data.preferences.ThemePreference
 import com.codecraft.volttrack.data.preferences.UserPreferences
@@ -64,6 +74,7 @@ fun SettingsScreen(
     SettingsScreenContent(
         prefs = prefs,
         onSetTheme = viewModel::setTheme,
+        onSetThemeColor = viewModel::setThemeColor,
         onSetPowerUnit = viewModel::setPowerUnit,
         onSetOverheatThreshold = viewModel::setOverheatThreshold,
         onSetSlowChargingThreshold = viewModel::setSlowChargingThreshold,
@@ -78,6 +89,7 @@ fun SettingsScreen(
 fun SettingsScreenContent(
     prefs: UserPreferences,
     onSetTheme: (ThemePreference) -> Unit,
+    onSetThemeColor: (AppThemeColor) -> Unit,
     onSetPowerUnit: (PowerUnit) -> Unit,
     onSetOverheatThreshold: (Double) -> Unit,
     onSetSlowChargingThreshold: (Double, Boolean) -> Unit,
@@ -139,6 +151,62 @@ fun SettingsScreenContent(
                 }
             }
         }
+
+        // --- Theme Color Selection ---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
+        ) {
+            Column(Modifier.padding(vertical = 12.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Palette,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Accent color",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                }
+
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                ) {
+                    items(AppThemeColor.entries) { colorOption ->
+                        ColorOptionItem(
+                            option = colorOption,
+                            isSelected = prefs.themeColor == colorOption,
+                            onClick = { onSetThemeColor(colorOption) }
+                        )
+                    }
+                }
+
+                Text(
+                    text = when (prefs.themeColor) {
+                        AppThemeColor.DYNAMIC -> "Using system colors (Material You)"
+                        AppThemeColor.PURPLE -> "VoltTrack Purple"
+                        AppThemeColor.BLUE -> "Ocean Blue"
+                        AppThemeColor.GREEN -> "Emerald Green"
+                        AppThemeColor.ORANGE -> "Sunset Orange"
+                        AppThemeColor.ROSE -> "Rose Pink"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
@@ -303,6 +371,7 @@ fun SettingsScreenContent(
                 }
             }
         }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
@@ -355,6 +424,67 @@ fun SettingsScreenContent(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ColorOptionItem(
+    option: AppThemeColor,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val colorBrush = when (option) {
+        AppThemeColor.DYNAMIC -> Brush.sweepGradient(
+            listOf(Color(0xFF4285F4), Color(0xFF34A853), Color(0xFFFBBC05), Color(0xFFEA4335), Color(0xFF4285F4))
+        )
+        AppThemeColor.PURPLE -> Brush.linearGradient(listOf(Color(0xFF6650a4), Color(0xFFD0BCFF)))
+        AppThemeColor.BLUE -> Brush.linearGradient(listOf(Color(0xFF0061A4), Color(0xFF9ECAFF)))
+        AppThemeColor.GREEN -> Brush.linearGradient(listOf(Color(0xFF006D3B), Color(0xFF7ED99B)))
+        AppThemeColor.ORANGE -> Brush.linearGradient(listOf(Color(0xFF8B5000), Color(0xFFFFB77C)))
+        AppThemeColor.ROSE -> Brush.linearGradient(listOf(Color(0xFF984061), Color(0xFFFFB1C8)))
+    }
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Outline for selection
+        if (isSelected) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.Transparent,
+                border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+            ) {}
+        }
+
+        Box(
+            modifier = Modifier
+                .size(if (isSelected) 32.dp else 40.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colorBrush)
+        ) {
+            if (option == AppThemeColor.DYNAMIC) {
+                Icon(
+                    Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp).align(Alignment.Center)
+                )
+            }
+            if (isSelected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp).align(Alignment.Center)
                 )
             }
         }
@@ -420,6 +550,7 @@ fun SettingsScreenPreview() {
                 isCustomSlowThreshold = false
             ),
             onSetTheme = {},
+            onSetThemeColor = {},
             onSetPowerUnit = {},
             onSetOverheatThreshold = {},
             onSetSlowChargingThreshold = { _, _ -> },
@@ -438,6 +569,7 @@ fun SettingsScreenDarkPreview() {
         SettingsScreenContent(
             prefs = UserPreferences(
                 theme = ThemePreference.DARK,
+                themeColor = AppThemeColor.ORANGE,
                 powerUnit = PowerUnit.WATTS,
                 refreshIntervalMs = 2000L,
                 goalEnabled = true,
@@ -447,6 +579,7 @@ fun SettingsScreenDarkPreview() {
                 isCustomSlowThreshold = true
             ),
             onSetTheme = {},
+            onSetThemeColor = {},
             onSetPowerUnit = {},
             onSetOverheatThreshold = {},
             onSetSlowChargingThreshold = { _, _ -> },

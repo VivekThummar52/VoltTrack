@@ -372,61 +372,6 @@ fun SettingsScreenContent(
             }
         }
 
-        // --- Theme Color Selection ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
-        ) {
-            Column(Modifier.padding(vertical = 12.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.Palette,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Accent color",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                }
-
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                ) {
-                    items(AppThemeColor.entries) { colorOption ->
-                        ColorOptionItem(
-                            option = colorOption,
-                            isSelected = prefs.themeColor == colorOption,
-                            onClick = { onSetThemeColor(colorOption) }
-                        )
-                    }
-                }
-
-                Text(
-                    text = when (prefs.themeColor) {
-                        AppThemeColor.DYNAMIC -> "Using system colors (Material You)"
-                        AppThemeColor.PURPLE -> "VoltTrack Purple"
-                        AppThemeColor.BLUE -> "Ocean Blue"
-                        AppThemeColor.GREEN -> "Emerald Green"
-                        AppThemeColor.ORANGE -> "Sunset Orange"
-                        AppThemeColor.ROSE -> "Rose Pink"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-        }
-
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)

@@ -393,7 +393,11 @@ fun BatteryOverviewCard(uiState: MainUiState, locale: Locale) {
                     StatRow(
                         icon = Icons.Filled.FavoriteBorder,
                         label = "Battery Health",
-                        value = uiState.healthPercent?.let { "$it%" } ?: "--"
+                        value = when (val hp = uiState.healthPercent) {
+                            null -> "Unknown"
+                            -1 -> "Unknown"
+                            else -> "$hp%"
+                        }
                     )
                 }
             }

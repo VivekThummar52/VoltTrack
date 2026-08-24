@@ -14,6 +14,8 @@ class BatteryMonitor(private val context: Context) {
     companion object {
         /** Same id as [BatteryManager.BATTERY_PROPERTY_CHARGE_FULL] (API 34+). */
         private const val PROPERTY_CHARGE_FULL = 6
+        /** Same id as BATTERY_PROPERTY_STATE_OF_HEALTH (API 34+). */
+        private const val PROPERTY_STATE_OF_HEALTH = 10
         private const val PREFS = "volttrack_battery"
         private const val KEY_FULL_MICRO_AH = "full_charge_micro_ah"
     }
@@ -54,10 +56,15 @@ class BatteryMonitor(private val context: Context) {
         }
 
         if (Build.VERSION.SDK_INT >= 34) {
-            val chargeFull = bm.getLongProperty(PROPERTY_CHARGE_FULL)
-            percentageFromChargeAndFull(chargeCounter, chargeFull)?.let {
-                persistFullMicroAh(chargeFull)
-                return it
+            try {
+                val chargeFull = bm.getLongProperty(PROPERTY_CHARGE_FULL)
+                percentageFromChargeAndFull(chargeCounter, chargeFull)?.let {
+                    persistFullMicroAh(chargeFull)
+                    return it
+                }
+            } catch (e: SecurityException) {
+                // These properties require BATTERY_STATS permission (signature|privileged)
+                // which is strictly enforced on Android 16+.
             }
         }
 
@@ -147,9 +154,15 @@ class BatteryMonitor(private val context: Context) {
 
     fun getHealthPercent(): Int? {
         if (Build.VERSION.SDK_INT >= 34) {
-            // BATTERY_PROPERTY_STATE_OF_HEALTH constant value is 10
-            val soh = bm.getIntProperty(10)
-            if (soh in 1..100) return soh
+            try {
+                // BATTERY_PROPERTY_STATE_OF_HEALTH constant value is 10
+                // Requires BATTERY_STATS permission, strictly enforced on Android 16+.
+                val soh = bm.getIntProperty(PROPERTY_STATE_OF_HEALTH)
+                if (soh in 1..100) return soh
+            } catch (e: SecurityException) {
+                // Handle missing permission gracefully
+                return -1
+            }
         }
         return null
     }

@@ -24,6 +24,8 @@ class PreferencesRepository(private val context: Context) {
             onboardingComplete = p[KEY_ONBOARDING_DONE] ?: false,
             theme = p[KEY_THEME]?.let { runCatching { ThemePreference.valueOf(it) }.getOrNull() }
                 ?: ThemePreference.SYSTEM,
+            themeColor = p[KEY_THEME_COLOR]?.let { runCatching { AppThemeColor.valueOf(it) }.getOrNull() }
+                ?: AppThemeColor.DYNAMIC,
             powerUnit = p[KEY_POWER_UNIT]?.let { runCatching { PowerUnit.valueOf(it) }.getOrNull() }
                 ?: PowerUnit.WATTS,
             refreshIntervalMs = p[KEY_REFRESH_MS]?.coerceIn(REFRESH_MIN, REFRESH_MAX) ?: 2000L,
@@ -43,6 +45,10 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setTheme(theme: ThemePreference) {
         appContext.dataStore.edit { it[KEY_THEME] = theme.name }
+    }
+
+    suspend fun setThemeColor(color: AppThemeColor) {
+        appContext.dataStore.edit { it[KEY_THEME_COLOR] = color.name }
     }
 
     suspend fun setPowerUnit(unit: PowerUnit) {
@@ -86,6 +92,7 @@ class PreferencesRepository(private val context: Context) {
     companion object {
         private val KEY_ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
         private val KEY_THEME = stringPreferencesKey("theme")
+        private val KEY_THEME_COLOR = stringPreferencesKey("theme_color")
         private val KEY_POWER_UNIT = stringPreferencesKey("power_unit")
         private val KEY_REFRESH_MS = longPreferencesKey("refresh_ms")
         private val KEY_GOAL_ENABLED = booleanPreferencesKey("goal_enabled")

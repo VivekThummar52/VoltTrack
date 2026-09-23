@@ -3,6 +3,7 @@ package com.codecraft.volttrack.ui.settings
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.codecraft.volttrack.data.preferences.AppThemeColor
 import com.codecraft.volttrack.data.preferences.PowerUnit
 import com.codecraft.volttrack.data.preferences.PreferencesRepository
 import com.codecraft.volttrack.data.preferences.ThemePreference
@@ -23,6 +24,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setTheme(theme: ThemePreference) {
         viewModelScope.launch { repository.setTheme(theme) }
+    }
+
+    fun setThemeColor(color: AppThemeColor) {
+        viewModelScope.launch { repository.setThemeColor(color) }
     }
 
     fun setPowerUnit(unit: PowerUnit) {

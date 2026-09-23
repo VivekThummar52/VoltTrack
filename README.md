@@ -21,7 +21,7 @@ Each completed session records **start/end time**, **percentage gained**, **peak
       <td align="center"><strong>Intro Screen</strong></td>
       <td align="center"><strong>Current/Today session</strong></td>
       <td align="center"><strong>Recent Session Overview</strong></td>
-      <td align="center"><strong>7-Day Chart</strong></td>
+      <td align="center"><strong>Interactive Charts</strong></td>
     </tr>
     <tr>
       <td><img width="270" src="https://github.com/user-attachments/assets/2c98a0e5-acf1-480a-9952-576a3d48364b" /></td>
@@ -50,15 +50,17 @@ Each completed session records **start/end time**, **percentage gained**, **peak
 
 | Area | What you get |
 |------|--------------|
-| **Live dashboard** | Battery %, smoothed input power (W or mW), updated on a configurable interval |
-| **Current session card** | In-progress charge — gain so far, duration, peak watts, "charge completed" time if observed |
-| **Session history** | Completed sessions grouped by day (Today / Yesterday / full date), collapsible with a per-day summary |
-| **7-day chart** | Bar chart of total time on charger per calendar day, last 7 days |
-| **Battery goal alert** | Optional notification when battery reaches your target % while plugged in |
-| **Onboarding** | First-run screen covering monitoring, estimates, notifications, and notification permission request |
-| **Privacy screen** | In-app explanation of local-only storage, permissions, and estimate accuracy |
-| **Settings** | Theme (Light / Dark / System), power unit (W / mW), refresh interval (1 s – 10 s), goal toggle + target % |
-| **Background monitoring** | Foreground service (when allowed) keeps monitoring alive with a persistent notification |
+| **Live dashboard** | Battery %, smoothed input power (W or mW), updated on a configurable interval. |
+| **Current session card** | In-progress charge — gain so far, duration, peak watts, "charge completed" time if observed. |
+| **Session history** | Completed sessions grouped by day, collapsible with a per-day summary. |
+| **KPI Summary** | Instant insights on Avg. Duration, Total Gained, Avg. Peak Power, and Peak Temp. |
+| **Interactive Charts** | Multi-range (7D/14D/30D/All) charts for Power Trends, Temperature Safety, and Charging Habits. |
+| **Smart Alerts** | Intelligent notifications for Overheating and Slow Charging with change-based triggers. |
+| **Theme Customization** | Choose between Dynamic (Material You) or 5 curated accent colors (Purple, Blue, Green, Orange, Rose). |
+| **Battery goal alert** | Optional notification when battery reaches your target % while plugged in. |
+| **Onboarding** | First-run screen covering monitoring, estimates, notifications, and permission request. |
+| **Privacy screen** | In-app explanation of local-only storage, permissions, and estimate accuracy. |
+| **Settings** | Theme (Light/Dark/System), Accent Color, Power Unit (W/mW), Refresh Interval (1s–10s), Alerts, and Goal. |
 
 ---
 
@@ -90,20 +92,17 @@ flowchart LR
 ```
 
 **1. Plug in**
-- `PowerReceiver` calls `beginChargingSession`, or the **ViewModel loop** detects external power and starts a session.
+- `PowerReceiver` or the **ViewModel loop** detects external power and starts a session via `ChargingSessionRecorder`.
 - Active session data lives in **SharedPreferences** until finalize — surviving process death during fast unplugs.
 
 **2. While charging**
-- `MainViewModel` polls `BatteryMonitor`: plug state, %, watts, smoothing, and updates **peak watts** and **charge-completed timestamp** via `ChargingSessionRecorder`.
-- `ChargingService` (foreground) also samples watts on the same interval.
-- The UI reads **Room** for history and the **prefs snapshot** for the current-session card.
+- `MainViewModel` and `ChargingService` poll `BatteryMonitor` for plug state, %, watts, and temperature.
+- `AlertManager` intelligently monitors for overheating or slow charging speed drops.
+- `ChargingService` captures the exact "Full" battery timestamp even when the app is closed.
 
 **3. Unplug**
-- `PowerReceiver` runs `finalizeSessionBlocking`, or the UI loop calls `finalizeSession`: builds a `ChargingSession`, inserts into Room, clears prefs, and posts a "session saved" notification.
-- The new row appears immediately under **Recent Sessions**.
-
-**4. Return to foreground**
-- On `Activity.onStart`, the app checks charging state and aligns session tracking, starting the foreground service if needed.
+- The session is finalized, built into a `ChargingSession` object, and inserted into **Room**.
+- A "session saved" notification is posted, and history updates instantly.
 
 ---
 
@@ -111,59 +110,13 @@ flowchart LR
 
 | Layer | Role |
 |-------|------|
-| **UI** | `MainActivity` → `VoltTrackNavHost` → `MainScreen`, `ChartsScreen`, `SettingsScreen`, `PrivacyScreen`, `OnboardingScreen` (all Compose) |
-| **ViewModel** | `MainViewModel` — `MainUiState` (`StateFlow`): battery %, watts, active session, session list, collapsed day keys, charging loop, goal notification logic |
-| **ViewModel** | `SettingsViewModel` — proxies `PreferencesRepository` writes; exposes prefs as `StateFlow` |
-| **Repository** | `SessionRepository` — exposes `Flow<List<ChargingSession>>` from Room |
-| **Preferences** | `PreferencesRepository` — DataStore-backed; theme, power unit, refresh interval, goal settings |
-| **Data** | `ChargingSession` entity + `SessionDao`, `AppDatabase` (Room v2 with migration), `ChargingSessionRecorder` (active session in prefs + finalize → Room) |
-| **Logic** | `BatteryMonitor` — precision level, current watts, plug detection; handles OEM unit ambiguity |
-| **System** | `ChargingService` (foreground, `dataSync` type), `PowerReceiver` (power connect/disconnect broadcasts) |
-
-```
-com.codecraft.volttrack
-├── MainActivity.kt
-├── VoltTrackApplication.kt         # Notification channel setup on app start
-├── data/
-│   ├── ChargingSession.kt          # Room entity + DAO + AppDatabase (v2)
-│   ├── ChargingSessionRecorder.kt  # Active session (SharedPreferences) + finalize → Room
-│   ├── preferences/
-│   │   ├── PreferencesRepository.kt
-│   │   └── UserPreferences.kt      # ThemePreference, PowerUnit enums
-│   └── repository/
-│       └── SessionRepository.kt
-├── logic/
-│   └── BatteryMonitor.kt
-├── notification/
-│   ├── NotificationChannels.kt     # Three channels: service, session events, goals
-│   └── NotificationHelper.kt
-├── receiver/
-│   └── PowerReceiver.kt
-├── service/
-│   └── ChargingService.kt
-└── ui/
-    ├── VoltTrackAppContent.kt      # Theme wrapper
-    ├── VoltTrackNavHost.kt         # Navigation graph + bottom bar
-    ├── PowerDisplay.kt             # W / mW formatting
-    ├── SessionUiFormatting.kt      # Date grouping, duration, summary lines
-    ├── StatusBarStyle.kt
-    ├── charts/
-    │   ├── ChartAggregation.kt     # 7-day bar data aggregation
-    │   └── ChartsScreen.kt
-    ├── main/
-    │   ├── MainViewModel.kt
-    │   └── MainScreen.kt
-    ├── onboarding/
-    │   └── OnboardingScreen.kt
-    ├── settings/
-    │   ├── SettingsViewModel.kt
-    │   ├── SettingsScreen.kt
-    │   └── PrivacyScreen.kt
-    └── theme/
-        ├── Color.kt
-        ├── Theme.kt                # Material You dynamic color (Android 12+), Light/Dark fallback
-        └── Type.kt
-```
+| **UI** | `MainActivity` → `VoltTrackNavHost` → Screens for Main, Charts, Settings, Privacy, and Onboarding. |
+| **ViewModel** | `MainViewModel` — Dashboard state & charging loop; `SettingsViewModel` — Preferences proxy. |
+| **Repository** | `SessionRepository` — Room abstraction; `PreferencesRepository` — DataStore implementation. |
+| **Notification** | `AlertManager` — Intelligent alert logic; `NotificationHelper` — UI notification builders. |
+| **Data** | Room Database (v2), SharedPreferences, and DataStore Preferences. |
+| **Logic** | `BatteryMonitor` — Raw OS battery data parser; `ChartAggregation` — Multi-range analytics engine. |
+| **System** | `ChargingService` (Background FGS), `PowerReceiver` (Connectivity broadcasts). |
 
 ---
 
@@ -175,9 +128,8 @@ com.codecraft.volttrack
 | **UI** | Jetpack Compose, Material 3, Navigation Compose 2.8.4 |
 | **Async** | Kotlin Coroutines, Flow, StateFlow |
 | **Lifecycle** | AndroidViewModel, `lifecycle-runtime-compose` (`collectAsStateWithLifecycle`) |
-| **Storage** | Room 2.6.1 (KAPT), DataStore Preferences 1.1.1, SharedPreferences (active session) |
+| **Storage** | Room 2.6.1 (KAPT), DataStore Preferences 1.1.1, SharedPreferences |
 | **Build** | AGP 8.12.3, Gradle 8.13, `compileSdk` / `targetSdk` 36, `minSdk` 25 |
-| **Testing** | JUnit 4, Google Truth, Coroutines Test, Room in-memory testing |
 
 ---
 
@@ -185,9 +137,9 @@ com.codecraft.volttrack
 
 | Permission | Purpose |
 |------------|---------|
-| `FOREGROUND_SERVICE` | Run `ChargingService` in the foreground while monitoring |
-| `FOREGROUND_SERVICE_DATA_SYNC` | Declares the foreground service type required on Android 14+ |
-| `POST_NOTIFICATIONS` | Show the ongoing service notification and session/goal alerts (Android 13+) |
+| `FOREGROUND_SERVICE` | Run `ChargingService` in the foreground while monitoring. |
+| `FOREGROUND_SERVICE_DATA_SYNC` | Declares the foreground service type required on Android 14+. |
+| `POST_NOTIFICATIONS` | Show the ongoing service notification and session/goal alerts (Android 13+). |
 
 ---
 
@@ -196,39 +148,12 @@ com.codecraft.volttrack
 **Requirements:** Android Studio (latest stable), JDK 11+, Android SDK 36.
 
 ```bash
-# Clone and open the project root in Android Studio, or build from the command line:
-
-# macOS / Linux
-./gradlew :app:assembleDebug
-
-# Windows (PowerShell)
-.\gradlew :app:assembleDebug
-
-# Install on a connected device or running emulator (API 25+)
-./gradlew :app:installDebug
+# Clone and build from the command line:
+./gradlew :app:assembleDebug   # build
+./gradlew :app:installDebug    # install
 ```
 
-Run the app on a physical device for accurate wattage readings — emulators do not expose real battery current data.
-
----
-
-## Tests
-
-The project has three test suites:
-
-| Test | Type | What it covers |
-|------|------|----------------|
-| `ChartAggregationTest` | Unit | `aggregateChargeTimeByDay` — empty list, same-day duration summing |
-| `MainViewModelGoalLogicTest` | Unit | Goal-fire logic (enabled/disabled, threshold boundary) |
-| `SessionDaoTest` | Instrumented | Room DAO insert + Flow emission on an in-memory database |
-
-```bash
-# Unit tests
-./gradlew :app:test
-
-# Instrumented tests (requires a connected device or emulator)
-./gradlew :app:connectedAndroidTest
-```
+Run on a **physical device** for accurate wattage readings — emulators do not expose real battery current data.
 
 ---
 
@@ -244,33 +169,10 @@ The project has three test suites:
 
 ## Notes & limitations
 
-- **Watt estimates** are derived from device-reported voltage and current (`BatteryManager`). OEM implementations vary widely — values are useful for trends, not lab-grade measurement.
-- **Foreground service** start rules differ by Android version. The app handles `ForegroundServiceStartNotAllowedException` and `SecurityException` gracefully; session tracking continues via SharedPreferences and the ViewModel path even if the service cannot start.
-- **`ACTION_POWER_CONNECTED`** does not launch the foreground service directly (blocked on Android 12+ in background). The service starts from the ViewModel when the app is in the foreground.
-- **Room database** is at version 2. The migration from v1 adds the `chargeCompletedAtMs` column.
-
----
-
-## Future ideas
-
-Not a committed roadmap — ideas worth considering as VoltTrack grows.
-
-| Direction | Idea |
-|-----------|------|
-| **Home screen widget** | Glanceable current %, watts, or last session summary |
-| **Export / backup** | CSV or JSON of sessions for spreadsheets or device transfers |
-| **Session detail** | Tap a row → full breakdown, optional notes, safe delete |
-| **Cost estimate** | Optional $/kWh (user-entered) × rough session energy |
-| **Wear OS / Quick Settings tile** | Power-user glance |
-| **Opt-in crash reporting** | e.g. Crashlytics, with updated privacy disclosure |
-| **Play Store** | Screenshots, short video, clear estimate disclaimer |
-| **KSP migration** | Replace KAPT with KSP for Room compiler (faster incremental builds) |
-
----
-
-## License
-
-Add your preferred license here (e.g. MIT, Apache-2.0) once you decide how you want VoltTrack distributed.
+- **Watt estimates** are derived from device-reported voltage and current. OEM implementations vary; values are for trend analysis.
+- **Background Capture**: The app records "Charging Completed" events in the background via the foreground service.
+- **Material You**: Dynamic colors are prioritized on Android 12+, with curated fallbacks for all users.
+- **Room Migration**: Migration from v1 to v2 adds the `chargeCompletedAtMs` support.
 
 ---
 

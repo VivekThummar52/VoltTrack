@@ -11,9 +11,19 @@ enum class PowerUnit {
     MILLIWATTS
 }
 
+enum class AppThemeColor {
+    DYNAMIC,
+    PURPLE,
+    BLUE,
+    GREEN,
+    ORANGE,
+    ROSE
+}
+
 data class UserPreferences(
     val onboardingComplete: Boolean = false,
     val theme: ThemePreference = ThemePreference.SYSTEM,
+    val themeColor: AppThemeColor = AppThemeColor.DYNAMIC,
     val powerUnit: PowerUnit = PowerUnit.WATTS,
     /** UI / monitor poll interval (ms). */
     val refreshIntervalMs: Long = 2000L,

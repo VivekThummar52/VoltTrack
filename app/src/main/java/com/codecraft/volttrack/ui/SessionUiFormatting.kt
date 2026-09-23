@@ -71,9 +71,13 @@ object SessionUiFormatting {
         val m = (totalSec % 3600) / 60
         val s = totalSec % 60
         return buildString {
-            if (h > 0) append("${h}h ")
-            if (m > 0 || h > 0) append("${m}m ")
-            append("${s}s")
+            if (h > 0) {
+                append("${h}h")
+                if (m > 0) append(" ${m}m")
+            } else {
+                if (m > 0) append("${m}m ")
+                append("${s}s")
+            }
         }.trim()
     }
 

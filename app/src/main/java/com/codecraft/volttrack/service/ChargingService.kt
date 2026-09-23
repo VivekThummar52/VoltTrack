@@ -64,7 +64,11 @@ class ChargingService : Service() {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
         }
-        registerReceiver(powerReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(powerReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(powerReceiver, filter)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -119,6 +123,12 @@ class ChargingService : Service() {
                 val pct = monitor.getPrecisionLevel(batteryIntent)
                 val currentWatts = monitor.getCurrentWatts(batteryIntent)
                 val currentTemp = monitor.getTemperature(batteryIntent)
+                
+                // Track "Charging Completed" time even when app is closed
+                if (monitor.isBatteryChargingComplete(batteryIntent)) {
+                    ChargingSessionRecorder.noteChargeCompletedIfUnset(this@ChargingService)
+                }
+
                 AlertManager.checkAndNotify(this@ChargingService, prefs, currentTemp, currentWatts)
 
                 if (currentWatts > maxWatts || currentTemp > maxTemp) {

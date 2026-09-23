@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "573775817997",
+    "project_id": "volttrack-6e6b5",
+    "storage_bucket": "volttrack-6e6b5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:573775817997:android:25eda6c7067fe0cb339444",
+        "android_client_info": {
+          "package_name": "com.codecraft.volttrack"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDm2VspmN0DvJX0fICWk4Nb4CPyNInOpKw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
